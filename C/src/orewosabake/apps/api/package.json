@@ -1,0 +1,14 @@
+{
+  "name": "@orewosabake/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@orewosabake/contracts": "0.1.0",
+    "zod": "^4.6.5"
+  }
+}

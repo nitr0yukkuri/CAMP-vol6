@@ -1,0 +1,25 @@
+{
+  "name": "orewosabake-workspace",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "workspaces": [
+    "apps/api",
+    "apps/web",
+    "packages/contracts"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @orewosabake/web",
+    "dev:api": "npm run dev --workspace @orewosabake/api",
+    "build:web": "npm run build --workspace @orewosabake/web",
+    "typecheck:web": "npm run typecheck --workspace @orewosabake/web",
+    "typecheck:api": "npm run typecheck --workspace @orewosabake/api"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.22.4",
+    "typescript": "^7.0.2"
+  }
+}
