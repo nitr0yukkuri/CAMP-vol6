@@ -68,9 +68,7 @@ The more crowded images and the source `Testing` subset score lower in this one-
 
 The error montage shows the 12 most confident wrong crop predictions. Green boxes in the full-frame montage are correctly classified crops; red boxes are mistakes. These pictures are useful for finding failure patterns, not for changing test labels after seeing results.
 
-![Most-confident crop classification errors](generated/head-tail-hog/error-montage.jpg)
-
-![All held-out images with crop labels](generated/head-tail-hog/full-frame-test-audit.jpg)
+The error montage and full-frame audit are generated locally under the ignored `ml/generated/head-tail-hog/` directory after running the training and analysis scripts. They are not embedded here because generated image files are intentionally excluded from Git.
 
 From the montage, many mistakes appear in crowded images with multiple fish, overlapping parts, cut or partial body regions, and similar fin/body texture. This is a visual hypothesis rather than a confirmed annotation defect. The crop classifier has no surrounding fish orientation or neighboring-part context; grayscale HOG also discards color cues. Tail recall is lower than head recall (69.9% vs. 81.0%), so tails are the more common missed class in this experiment.
 
