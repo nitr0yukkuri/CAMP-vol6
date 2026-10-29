@@ -2,8 +2,9 @@
   "name": "orewosabake-workspace",
   "private": true,
   "type": "module",
+  "packageManager": "npm@11.19.1",
   "engines": {
-    "node": ">=22.12"
+    "node": ">=24.22.1 <25"
   },
   "workspaces": [
     "apps/api",
@@ -18,8 +19,8 @@
     "typecheck:api": "npm run typecheck --workspace @orewosabake/api"
   },
   "devDependencies": {
-    "@types/node": "^24.10.1",
-    "tsx": "^4.22.4",
-    "typescript": "^7.0.2"
+    "@types/node": "24.19.2",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
   }
 }

@@ -4,7 +4,7 @@
 
 ## UIモックを起動
 
-Node.js 22.12以上が必要です。
+Node.js `24.22.1` と npm `11.19.1` に固定しています（`.nvmrc` / `packageManager`）。React・React DOMは `19.3.1`、全依存パッケージのバージョンはロックファイルと各workspace manifestで固定しています。
 
 ```powershell
 npm ci
