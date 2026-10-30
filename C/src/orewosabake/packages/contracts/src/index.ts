@@ -65,7 +65,7 @@ export const MOCK_GUIDE: Guide = GuideSchema.parse({
       id: "parts",
       title: "頭と尾を確認する",
       description: "画面外や手・道具による遮蔽を、切除済みと混同しません。",
-      expectedState: "head_removed",
+      expectedState: "unknown",
     },
     {
       id: "review",

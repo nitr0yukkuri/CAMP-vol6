@@ -7,9 +7,18 @@ import {
   ModelStatusSchema,
   ObservationSchema,
   type Guide,
+  type FishState,
   type ModelStatus,
   type Observation,
 } from "@orewosabake/contracts";
+
+const fishStateLabels: Record<FishState, string> = {
+  whole_fish: "魚全体",
+  head_removed: "頭を除去済み",
+  opened: "開いた状態",
+  filleted: "三枚おろし済み",
+  unknown: "工程状態は未判定",
+};
 
 async function getJson<T>(path: string, schema: { parse: (value: unknown) => T }, signal: AbortSignal): Promise<T> {
   const response = await fetch(path, { signal });
@@ -185,7 +194,7 @@ function App() {
                 <span className="step-number">STEP {String(activeStep + 1).padStart(2, "0")}</span>
                 <h3>{currentStep.title}</h3>
                 <p>{currentStep.description}</p>
-                <div className="expected-state"><span>確認する状態</span><code>{currentStep.expectedState}</code></div>
+                <div className="expected-state"><span>工程状態（参考）</span><code>{fishStateLabels[currentStep.expectedState]}</code></div>
               </div>
             ) : null}
 
