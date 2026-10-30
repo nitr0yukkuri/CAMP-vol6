@@ -16,7 +16,17 @@ const port = Number(process.env.PORT ?? 3001);
 const host = process.env.HOST ?? "127.0.0.1";
 
 const MAX_BODY_BYTES = 16 * 1024;
+const MAX_GUIDE_SESSIONS = 500;
+const GUIDE_SESSION_TTL_MS = 30 * 60 * 1000;
 const guideSessions = new Map<string, GuideSession>();
+
+function pruneExpiredGuideSessions(now = Date.now()) {
+  for (const [sessionId, session] of guideSessions) {
+    if (now - Date.parse(session.updatedAt) >= GUIDE_SESSION_TTL_MS) {
+      guideSessions.delete(sessionId);
+    }
+  }
+}
 
 function sendJson(response: import("node:http").ServerResponse, status: number, body: unknown) {
   response.writeHead(status, {
@@ -44,19 +54,23 @@ async function readJsonBody(request: import("node:http").IncomingMessage): Promi
   }
 
   const declaredLength = Number(request.headers["content-length"] ?? 0);
-  if (declaredLength > MAX_BODY_BYTES) {
-    throw Object.assign(new Error("リクエストのサイズが上限（16 KiB）を超えています。"), { status: 413, code: "PAYLOAD_TOO_LARGE" });
-  }
+  let tooLarge = Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES;
 
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
+    if (tooLarge) continue;
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.byteLength;
     if (size > MAX_BODY_BYTES) {
-      throw Object.assign(new Error("リクエストのサイズが上限（16 KiB）を超えています。"), { status: 413, code: "PAYLOAD_TOO_LARGE" });
+      tooLarge = true;
+      chunks.length = 0;
+      continue;
     }
     chunks.push(buffer);
+  }
+  if (tooLarge) {
+    throw Object.assign(new Error("リクエストのサイズが上限（16 KiB）を超えています。"), { status: 413, code: "PAYLOAD_TOO_LARGE" });
   }
 
   try {
@@ -110,6 +124,8 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
     return;
   }
 
+  pruneExpiredGuideSessions();
+
   const sessionMatch = pathname.match(/^\/api\/guide\/sessions\/([0-9a-f-]{36})$/i);
   const advanceMatch = pathname.match(/^\/api\/guide\/sessions\/([0-9a-f-]{36})\/advance$/i);
 
@@ -125,6 +141,10 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
     const parsed = GuideRequestSchema.safeParse(body);
     if (!parsed.success) {
       sendError(response, 422, "VALIDATION_ERROR", "入力内容に誤りがあります。", validationDetails(parsed.error.issues));
+      return;
+    }
+    if (guideSessions.size >= MAX_GUIDE_SESSIONS) {
+      sendError(response, 503, "SESSION_CAPACITY_REACHED", "保持中のガイドセッション数が上限に達しています。時間をおいて再試行してください。");
       return;
     }
     const session = createMockSession(parsed.data.fishId, parsed.data.preparationId);
@@ -211,6 +231,13 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
     return;
   }
 
+  const postOnlySessionPath = pathname === "/api/guide/sessions" || advanceMatch !== null;
+  if (postOnlySessionPath && request.method !== "POST") {
+    response.setHeader("Allow", "POST");
+    sendError(response, 405, "METHOD_NOT_ALLOWED", "このHTTPメソッドには対応していません。");
+    return;
+  }
+
   if (request.method !== "GET") {
     const sessionEndpoint = pathname === "/api/guide/sessions" || sessionMatch !== null || advanceMatch !== null;
     const supportedPath = [
@@ -222,7 +249,7 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
       "/api/model/mock-observation",
     ].includes(pathname) || sessionEndpoint;
     if (!supportedPath) {
-    sendError(response, 404, "NOT_FOUND", "指定されたAPIは見つかりません。");
+      sendError(response, 404, "NOT_FOUND", "指定されたAPIは見つかりません。");
       return;
     }
     const allow = pathname === "/api/guide"
