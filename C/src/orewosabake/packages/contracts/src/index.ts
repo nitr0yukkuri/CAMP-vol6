@@ -20,12 +20,53 @@ export const GuideSchema = z.object({
   steps: z.array(GuideStepSchema).min(1),
 });
 
+export const FishIdSchema = z.enum(["aji", "saba", "tai"]);
+export const PreparationIdSchema = z.enum(["edible_portion"]);
+
+export const GuideRequestSchema = z.object({
+  fishId: FishIdSchema,
+  preparationId: PreparationIdSchema,
+}).strict();
+
+export const AdvanceGuideStepRequestSchema = z.object({
+  stepId: z.string().min(1),
+  source: z.enum(["button", "voice"]),
+  transcript: z.string().optional(),
+}).strict();
+
+export const GuideSessionSchema = z.object({
+  sessionId: z.string().uuid(),
+  fishId: FishIdSchema,
+  preparationId: PreparationIdSchema,
+  guide: GuideSchema,
+  currentStep: GuideStepSchema.nullable(),
+  currentStepIndex: z.number().int().min(0),
+  completedStepIds: z.array(z.string()),
+  status: z.enum(["active", "completed"]),
+  source: z.literal("mock"),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+
+export const CatalogSchema = z.object({
+  fish: z.array(z.object({ id: FishIdSchema, name: z.string() })),
+  preparations: z.array(z.object({ id: PreparationIdSchema, name: z.string() })),
+  guideAvailability: z.enum(["not_configured", "available"]),
+});
+
 export const ModelStatusSchema = z.object({
   status: z.enum(["not_trained", "ready"]),
   runtime: z.literal("mediapipe_tasks_vision"),
   task: z.literal("head_tail_object_detection"),
   modelName: z.string().nullable(),
   processStateRecognition: z.literal("not_available"),
+});
+
+export const OrientationConfigSchema = z.object({
+  cookingGuide: z.object({
+    preferredOrientation: z.enum(["portrait", "landscape"]),
+    behavior: z.enum(["prompt", "lock_when_supported"]),
+  }),
 });
 
 export const DetectionSchema = z.object({
@@ -48,7 +89,12 @@ export const ObservationSchema = z.object({
 export type FishState = z.infer<typeof FishStateSchema>;
 export type GuideStep = z.infer<typeof GuideStepSchema>;
 export type Guide = z.infer<typeof GuideSchema>;
+export type GuideRequest = z.infer<typeof GuideRequestSchema>;
+export type AdvanceGuideStepRequest = z.infer<typeof AdvanceGuideStepRequestSchema>;
+export type GuideSession = z.infer<typeof GuideSessionSchema>;
+export type Catalog = z.infer<typeof CatalogSchema>;
 export type ModelStatus = z.infer<typeof ModelStatusSchema>;
+export type OrientationConfig = z.infer<typeof OrientationConfigSchema>;
 export type Detection = z.infer<typeof DetectionSchema>;
 export type Observation = z.infer<typeof ObservationSchema>;
 
@@ -82,6 +128,25 @@ export const MOCK_MODEL_STATUS: ModelStatus = ModelStatusSchema.parse({
   task: "head_tail_object_detection",
   modelName: null,
   processStateRecognition: "not_available",
+});
+
+export const ORIENTATION_CONFIG: OrientationConfig = OrientationConfigSchema.parse({
+  cookingGuide: {
+    preferredOrientation: "landscape",
+    behavior: "prompt",
+  },
+});
+
+export const CATALOG: Catalog = CatalogSchema.parse({
+  fish: [
+    { id: "aji", name: "あじ" },
+    { id: "saba", name: "さば" },
+    { id: "tai", name: "鯛" },
+  ],
+  preparations: [
+    { id: "edible_portion", name: "可食部を取り出す" },
+  ],
+  guideAvailability: "not_configured",
 });
 
 export const MOCK_OBSERVATION: Observation = ObservationSchema.parse({
