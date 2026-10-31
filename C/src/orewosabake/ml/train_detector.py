@@ -272,10 +272,19 @@ def float_or_list(value: Any) -> float | list[float]:
     return float(value)
 
 
-def evaluate_exported_detector(generated_root: Path, output_root: Path) -> dict[str, Any]:
+def evaluate_exported_detector(
+    generated_root: Path,
+    output_root: Path,
+    model_source: Path | None = None,
+    publish_web_model: bool = True,
+    fixed_score_threshold: float | None = None,
+) -> dict[str, Any]:
     """Check a saved model with MediaPipe and report validation/test metrics."""
+    if fixed_score_threshold is not None and not 0 <= fixed_score_threshold <= 1:
+        raise ValueError("Evaluation score threshold must be between 0 and 1")
+    output_root.mkdir(parents=True, exist_ok=True)
     dataset_root = generated_root / "coco"
-    model_path = output_root / "head-tail.tflite"
+    model_path = model_source.resolve() if model_source else output_root / "head-tail.tflite"
     sample_images = sorted((dataset_root / "test" / "images").glob("*.jpg"))
     if not sample_images:
         raise FileNotFoundError("No held-out image is available for the MediaPipe compatibility check")
@@ -283,7 +292,15 @@ def evaluate_exported_detector(generated_root: Path, output_root: Path) -> dict[
     validation_predictions = collect_exported_predictions(
         model_path, dataset_root / "validation", max_results=APP_MAX_RESULTS
     )
-    threshold_calibration = calibrate_score_threshold(validation_predictions)
+    threshold_calibration = (
+        calibrate_score_threshold(validation_predictions)
+        if fixed_score_threshold is None
+        else {
+            "selected_score_threshold": fixed_score_threshold,
+            "method": "fixed_threshold",
+            "candidates": [],
+        }
+    )
     compatibility = verify_exported_model(
         model_path,
         sample_images[0],
@@ -324,14 +341,17 @@ def evaluate_exported_detector(generated_root: Path, output_root: Path) -> dict[
     )
 
     web_model_path = PROJECT_ROOT / "apps" / "web" / "public" / "models" / "head-tail.tflite"
-    web_model_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(model_path, web_model_path)
+    if publish_web_model and model_path.resolve() != web_model_path.resolve():
+        web_model_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(model_path, web_model_path)
 
     report_path = output_root / "metrics.json"
     # Rebuild all evaluation fields from the current artifact instead of
     # carrying training metrics from an older model into --evaluate-only output.
     report: dict[str, Any] = {}
     summary_path = generated_root / "prepare-summary.json"
+    if not summary_path.is_file():
+        summary_path = generated_root / "phone-capture-summary.json"
     dataset_summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.is_file() else {}
     try:
         mediapipe_version = importlib.metadata.version("mediapipe")
@@ -342,7 +362,7 @@ def evaluate_exported_detector(generated_root: Path, output_root: Path) -> dict[
         "model_path": str(model_path),
         "model_bytes": model_path.stat().st_size,
         "model_sha256": sha256_file(model_path),
-        "web_model_path": str(web_model_path),
+        "web_model_path": str(web_model_path) if publish_web_model else None,
         "evaluation_runtime": {
             "mediapipe": mediapipe_version,
             "python": platform.python_version(),
@@ -816,15 +836,48 @@ def main() -> None:
     parser.add_argument("--generated", type=Path, default=DEFAULT_GENERATED, help="Ignored generated data directory")
     parser.add_argument("--prepare-only", action="store_true", help="Convert annotations and print split counts only")
     parser.add_argument("--evaluate-only", action="store_true", help="Check and evaluate an existing exported model without retraining")
+    parser.add_argument("--prepared-only", action="store_true", help="Train using an existing grouped COCO dataset instead of converting the Mendeley source")
+    parser.add_argument("--model", type=Path, help="Model file to evaluate; defaults to --generated/output/head-tail.tflite")
+    parser.add_argument("--score-threshold", type=float, help="Use a fixed evaluation threshold instead of tuning it on validation")
+    parser.add_argument("--no-copy-web-model", action="store_true", help="Do not copy an evaluation model into the web app")
     parser.add_argument("--force", action="store_true", help="Replace only the generated COCO conversion")
     args = parser.parse_args()
 
+    if args.evaluate_only and args.prepared_only:
+        parser.error("--evaluate-only and --prepared-only cannot be combined")
+    if args.evaluate_only and (args.prepare_only or args.force):
+        parser.error("--prepare-only and --force cannot be combined with --evaluate-only")
     if args.evaluate_only:
-        report = evaluate_exported_detector(args.generated.resolve(), (args.generated / "output").resolve())
+        report = evaluate_exported_detector(
+            args.generated.resolve(),
+            (args.generated / "output").resolve(),
+            model_source=args.model,
+            publish_web_model=not args.no_copy_web_model,
+            fixed_score_threshold=args.score_threshold,
+        )
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return
 
-    summary = prepare_dataset(args.source, args.generated, force=args.force)
+    if args.model or args.score_threshold is not None or args.no_copy_web_model:
+        parser.error("--model, --score-threshold, and --no-copy-web-model require --evaluate-only")
+    if args.prepared_only and args.prepare_only:
+        parser.error("--prepared-only and --prepare-only cannot be combined")
+    if args.prepared_only and args.force:
+        parser.error("--force only applies when converting a source dataset; it cannot be combined with --prepared-only")
+    if args.prepared_only:
+        generated_root = args.generated.resolve()
+        dataset_root = generated_root / "coco"
+        missing_splits = [name for name in ("train", "validation", "test") if not (dataset_root / name / "labels.json").is_file()]
+        if missing_splits:
+            parser.error(f"prepared COCO dataset is missing labels for: {', '.join(missing_splits)}")
+        summary_path = generated_root / "phone-capture-summary.json"
+        if not summary_path.is_file():
+            summary_path = generated_root / "prepare-summary.json"
+        if not summary_path.is_file():
+            parser.error("prepared dataset must include phone-capture-summary.json or prepare-summary.json")
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    else:
+        summary = prepare_dataset(args.source, args.generated, force=args.force)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     if not args.prepare_only:
         report = train_model(args.generated.resolve(), (args.generated / "output").resolve())
