@@ -17,6 +17,7 @@ const maxGuideSessions = 500;
 const guideSessionTtlMs = 30 * 60 * 1000;
 const sessionCreationBucketCapacity = 10;
 const sessionCreationRefillMs = 10 * 1000;
+const sessionCreationLimitRetentionMs = sessionCreationBucketCapacity * sessionCreationRefillMs;
 
 interface Env {
   GUIDE_SESSIONS: DurableObjectNamespace<GuideSessionStore>;
@@ -119,6 +120,9 @@ export class GuideSessionStore extends DurableObject<Env> {
     ctx.storage.sql.exec(
       "CREATE INDEX IF NOT EXISTS guide_session_creation_limits_updated_at_idx ON guide_session_creation_limits (updated_at)",
     );
+    ctx.storage.sql.exec(
+      "CREATE INDEX IF NOT EXISTS guide_sessions_updated_at_idx ON guide_sessions (updated_at)",
+    );
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -134,7 +138,7 @@ export class GuideSessionStore extends DurableObject<Env> {
 
         const now = Date.now();
         const clientHash = await hashClientAddress(request.headers.get("cf-connecting-ip") ?? "local-development");
-        const staleLimitCutoff = now - sessionCreationBucketCapacity * sessionCreationRefillMs;
+        const staleLimitCutoff = now - sessionCreationLimitRetentionMs;
         this.ctx.storage.sql.exec(
           "DELETE FROM guide_session_creation_limits WHERE updated_at <= ?",
           staleLimitCutoff,
@@ -171,6 +175,7 @@ export class GuideSessionStore extends DurableObject<Env> {
           availableTokens - 1,
           now,
         );
+        await this.scheduleCleanupAlarm();
 
         const expiryCutoff = new Date(Date.now() - guideSessionTtlMs).toISOString();
         this.ctx.storage.sql.exec("DELETE FROM guide_sessions WHERE updated_at <= ?", expiryCutoff);
@@ -188,6 +193,7 @@ export class GuideSessionStore extends DurableObject<Env> {
 
       if (sessionMatch && request.method === "GET") {
         const session = this.getActiveSession(sessionMatch[1]!);
+        if (session) await this.scheduleCleanupAlarm();
         return session
           ? json(session)
           : errorResponse(404, "SESSION_NOT_FOUND", "ガイドセッションが見つかりません。");
@@ -228,6 +234,7 @@ export class GuideSessionStore extends DurableObject<Env> {
           updatedAt: new Date().toISOString(),
         });
         this.storeSession(nextSession);
+        await this.scheduleCleanupAlarm();
         return json(nextSession);
       }
 
@@ -241,6 +248,34 @@ export class GuideSessionStore extends DurableObject<Env> {
     } catch (error) {
       if (error instanceof RequestError) return errorResponse(error.status, error.code, error.message);
       throw error;
+    }
+  }
+
+  async alarm(): Promise<void> {
+    const now = Date.now();
+    this.ctx.storage.sql.exec(
+      "DELETE FROM guide_session_creation_limits WHERE updated_at <= ?",
+      now - sessionCreationLimitRetentionMs,
+    );
+    this.ctx.storage.sql.exec(
+      "DELETE FROM guide_sessions WHERE updated_at <= ?",
+      new Date(now - guideSessionTtlMs).toISOString(),
+    );
+    await this.scheduleCleanupAlarm();
+  }
+
+  private async scheduleCleanupAlarm(): Promise<void> {
+    const oldestLimit = this.ctx.storage.sql.exec<{ updated_at: number | null }>(
+      "SELECT MIN(updated_at) AS updated_at FROM guide_session_creation_limits",
+    ).one().updated_at;
+    const oldestSession = this.ctx.storage.sql.exec<{ updated_at: string | null }>(
+      "SELECT MIN(updated_at) AS updated_at FROM guide_sessions",
+    ).one().updated_at;
+    const nextLimitCleanup = oldestLimit === null ? Number.POSITIVE_INFINITY : oldestLimit + sessionCreationLimitRetentionMs;
+    const nextSessionCleanup = oldestSession === null ? Number.POSITIVE_INFINITY : Date.parse(oldestSession) + guideSessionTtlMs;
+    const nextCleanupAt = Math.min(nextLimitCleanup, nextSessionCleanup);
+    if (Number.isFinite(nextCleanupAt)) {
+      await this.ctx.storage.setAlarm(Math.max(nextCleanupAt, Date.now() + 1));
     }
   }
 
