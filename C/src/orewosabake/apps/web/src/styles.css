@@ -77,8 +77,6 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .hero-fish-photo.is-mascot, .fish-card-photo.is-mascot { transform: scale(1.1); }
 .hero-fish-visual > span { position: absolute; right: 7px; bottom: 7px; left: 7px; overflow: hidden; padding: 4px 7px; border-radius: 8px; color: var(--card); background: rgba(var(--deep-rgb), .82); font-size: 10px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .hero-fish-visual .fish-mark { width: 100%; height: 100%; }
-.hero-glow { position: absolute; z-index: -1; top: -86px; right: -51px; width: 220px; height: 220px; border: 1px solid rgba(var(--gold-rgb), .2); border-radius: 50%; }
-.hero-glow::after { position: absolute; inset: 17px; border: 1px solid rgba(var(--gold-rgb), .14); border-radius: inherit; content: ""; }
 
 .selection-content { padding: 15px 18px 20px; }
 .selection-content h2 { margin: 0 0 10px; color: var(--ink); font-size: 17px; font-weight: 800; letter-spacing: .015em; }
