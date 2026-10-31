@@ -519,6 +519,7 @@ function App() {
       downloadCaptureFile(imageBlob, filename);
       setCaptureRows((rows) => [...rows, row]);
       setCaptureManifestExported(false);
+      setCaptureReviewed(false);
       setCaptureMessage(`${filename} を端末へ保存しました。ラベルを確認して次のフレームを撮れます。`);
     } catch {
       setCaptureMessage("画像を保存できませんでした。ブラウザーのダウンロード許可と空き容量を確認してください。");
