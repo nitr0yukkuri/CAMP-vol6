@@ -220,6 +220,7 @@ function App() {
   const [selectedFish, setSelectedFish] = useState("ハマチ");
   const [guide, setGuide] = useState<Guide>(MOCK_GUIDE);
   const [guideSession, setGuideSession] = useState<GuideSession | null>(null);
+  const [localGuideCompleted, setLocalGuideCompleted] = useState(false);
   const [guideSessionLoading, setGuideSessionLoading] = useState(false);
   const [guideMessage, setGuideMessage] = useState("");
   const [guideAdvancing, setGuideAdvancing] = useState(false);
@@ -339,6 +340,8 @@ function App() {
   const chosenFish = selectedFish === "その他" ? search.trim() || "ほかの魚" : selectedFish;
   const selectedFishData = fishList.find((fish) => fish.name === selectedFish);
   const selectedFishVisualData = selectedFishData ?? (selectedFish === "その他" ? fishList.find((fish) => fish.name === "マグロ") : undefined);
+  const isLastGuideStep = activeStep >= guide.steps.length - 1;
+  const guideIsComplete = guideSession?.status === "completed" || (!guideSession && localGuideCompleted);
   const currentStep = guide.steps[activeStep];
   const fishCanContinue = selectedFish !== "その他" || search.trim().length > 0;
 
@@ -347,6 +350,7 @@ function App() {
     setActiveStep(0);
     setGuide(MOCK_GUIDE);
     setGuideSession(null);
+    setLocalGuideCompleted(false);
     setGuideSessionLoading(false);
     setGuideMessage("");
     setCameraMessage("");
@@ -547,13 +551,27 @@ function App() {
 
   async function advanceStep() {
     const nextIndex = Math.min(guide.steps.length - 1, activeStep + 1);
-    if (guideAdvanceInFlight.current || guideSession?.status === "completed") return;
+    if (guideAdvanceInFlight.current) return;
+
+    if (guideSession?.status === "completed") {
+      if (nextIndex !== activeStep) {
+        setActiveStep(nextIndex);
+        setGuideMessage("");
+      }
+      return;
+    }
 
     // The session API is authoritative. A locally selected earlier step can be
     // revisited; moving back to the server's current step stays local, and only
     // the next server step is submitted once the UI catches up.
     if (!guideSession) {
-      if (nextIndex !== activeStep) setActiveStep(nextIndex);
+      if (nextIndex !== activeStep) {
+        setActiveStep(nextIndex);
+        setGuideMessage("");
+      } else if (!localGuideCompleted) {
+        setLocalGuideCompleted(true);
+        setGuideMessage("このガイドを完了しました。");
+      }
       return;
     }
 
@@ -879,8 +897,8 @@ function App() {
                 </div>
                 <div className="guide-actions">
                   <div className="guide-controls">
-                    <button type="button" onClick={() => setActiveStep((step) => Math.max(0, step - 1))} disabled={activeStep === 0}>戻る</button>
-                    <button type="button" onClick={() => void advanceStep()} disabled={guideSessionLoading || guideAdvancing || (activeStep >= guide.steps.length - 1 && (!guideSession || guideSession.status === "completed"))}>{guideSessionLoading ? "準備中…" : guideAdvancing ? "更新中…" : guideSession?.status === "completed" ? "完了" : activeStep >= guide.steps.length - 1 ? "ガイドを完了" : "次の工程へ"} <span>→</span></button>
+                    <button type="button" onClick={() => { setActiveStep((step) => Math.max(0, step - 1)); setGuideMessage(""); }} disabled={activeStep === 0}>戻る</button>
+                    <button type="button" onClick={() => void advanceStep()} disabled={guideSessionLoading || guideAdvancing || (isLastGuideStep && guideIsComplete)}>{guideSessionLoading ? "準備中…" : guideAdvancing ? "更新中…" : isLastGuideStep && guideIsComplete ? "完了" : isLastGuideStep ? "ガイドを完了" : "次の工程へ"} <span>→</span></button>
                   </div>
                 </div>
               </aside>
