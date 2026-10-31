@@ -23,6 +23,9 @@
   --action: #9a6654;
   --action-rgb: 154, 102, 84;
   --action-hover: #875848;
+  --primary-cta: #ec704e;
+  --primary-cta-rgb: 236, 112, 78;
+  --primary-cta-hover: #d65f40;
   --focus: #486f64;
   --success: #4d7863;
   --success-rgb: 77, 120, 99;
@@ -105,8 +108,8 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .fish-card--other strong { font-size: 11px; }
 .empty-fish { grid-column: 1 / -1; margin: 22px 0; color: var(--muted); font-size: 12px; text-align: center; }
 
-.start-button { display: flex; width: 100%; min-height: 62px; flex-direction: column; align-items: center; justify-content: center; gap: 1px; margin-top: 14px; border: 0; border-radius: 17px; color: var(--on-dark); background: var(--action); box-shadow: 0 4px 0 rgba(var(--action-rgb), .16); cursor: pointer; transition: transform .15s ease, background .15s ease; }
-.start-button:hover:not(:disabled) { transform: translateY(-1px); background: var(--action-hover); }
+.start-button { display: flex; width: 100%; min-height: 62px; flex-direction: column; align-items: center; justify-content: center; gap: 1px; margin-top: 14px; border: 0; border-radius: 17px; color: var(--on-dark); background: var(--primary-cta); box-shadow: 0 4px 0 rgba(var(--primary-cta-rgb), .16); cursor: pointer; transition: transform .15s ease, background .15s ease; }
+.start-button:hover:not(:disabled) { transform: translateY(-1px); background: var(--primary-cta-hover); }
 .start-button strong { font-size: 16px; font-weight: 700; letter-spacing: 0; }
 .start-button span { font-size: 10px; font-weight: 500; }
 .start-button:disabled { cursor: not-allowed; opacity: .55; }
