@@ -374,9 +374,7 @@ function App() {
         <section className="selector-screen" aria-label="魚を選ぶ">
           <header className="hero">
             <div className="hero-copy">
-              <p className="hero-eyebrow">魚さばきガイド</p>
               <h1>俺を捌け！</h1>
-              <p>手順を見ながら、<br />落ち着いてさばこう。</p>
             </div>
             <div className="hero-fish-visual" key={selectedFish} aria-live="polite">
               {selectedFishVisualData ? (
