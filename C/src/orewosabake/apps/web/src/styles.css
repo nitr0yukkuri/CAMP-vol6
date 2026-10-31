@@ -72,7 +72,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .hero h1 { margin: 0; color: var(--card); font-size: 28px; font-weight: 700; letter-spacing: 0; line-height: 1; }
 .hero-copy > p:last-child { margin: 13px 0 0; font-size: 13px; font-weight: 600; line-height: 1.6; }
 .fish-mark { position: relative; z-index: 1; width: 132px; flex: 0 0 132px; filter: drop-shadow(0 9px 12px rgba(var(--shadow-rgb), .18)); }
-.hero-fish-visual { position: relative; z-index: 1; width: 132px; height: 116px; flex: 0 0 132px; overflow: hidden; border: 1px solid rgba(var(--card-rgb), .72); border-radius: 17px; background: transparent; box-shadow: 0 9px 18px rgba(var(--shadow-rgb), .18); }
+.hero-fish-visual { position: relative; z-index: 1; width: 132px; height: 116px; flex: 0 0 132px; overflow: hidden; border: 0; border-radius: 17px; background: transparent; box-shadow: none; }
 .hero-fish-photo { width: 100%; height: 100%; border: 0; border-radius: 0; background: transparent; object-fit: cover; filter: saturate(.82); }
 .hero-fish-photo.is-mascot, .fish-card-photo.is-mascot { object-fit: contain; }
 .hero-fish-photo.is-mascot, .fish-card-photo.is-mascot { transform: scale(1.1); }
