@@ -116,6 +116,9 @@ export class GuideSessionStore extends DurableObject<Env> {
         updated_at INTEGER NOT NULL
       )
     `);
+    ctx.storage.sql.exec(
+      "CREATE INDEX IF NOT EXISTS guide_session_creation_limits_updated_at_idx ON guide_session_creation_limits (updated_at)",
+    );
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -148,7 +151,7 @@ export class GuideSessionStore extends DurableObject<Env> {
           return new Response(JSON.stringify({ error: {
             code: "SESSION_RATE_LIMITED",
             message: "ガイドの開始回数が上限に達しました。少し待ってから再試行してください。",
-            retryAfterSeconds,
+            details: { retryAfterSeconds },
           } }), {
             status: 429,
             headers: {
