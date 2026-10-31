@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { AdvanceGuideStepRequestSchema, GuideContextRequestSchema, GuideRequestSchema, GuideSessionSchema, MOCK_GUIDE, type FishCategory, type Guide, type GuideContextRequest, type GuideRequest, type GuideSession, type Observation } from "@orewosabake/contracts";
 import { useHeadTailDetection, type HeadTailDetectionStatus } from "./hooks/useHeadTailDetection";
 
@@ -9,6 +9,8 @@ type CaptureStage = "whole" | "head_removed" | "gutted" | "filleting" | "finishe
 type PartVisibility = "present_visible" | "removed_confirmed" | "occluded" | "out_of_frame" | "unknown";
 type PresenceStatus = "true" | "false" | "unknown";
 type CaptureLabelSource = "unknown" | "ai_suggestion" | "manual";
+type CapturePart = "head" | "tail";
+type CaptureBox = { x: number; y: number; width: number; height: number };
 
 type CaptureRow = {
   fish_species: string;
@@ -32,6 +34,29 @@ type CaptureRow = {
   notes: string;
   ai_status: HeadTailDetectionStatus;
   ai_observation_json: string;
+  head_bbox_x: string;
+  head_bbox_y: string;
+  head_bbox_width: string;
+  head_bbox_height: string;
+  head_bbox_source: "manual" | "unknown";
+  tail_bbox_x: string;
+  tail_bbox_y: string;
+  tail_bbox_width: string;
+  tail_bbox_height: string;
+  tail_bbox_source: "manual" | "unknown";
+};
+
+type PendingCapture = {
+  blob: Blob;
+  previewUrl: string;
+  width: number;
+  height: number;
+  row: CaptureRow;
+  activePart: CapturePart;
+  headBox: CaptureBox | null;
+  tailBox: CaptureBox | null;
+  dragStart: { x: number; y: number } | null;
+  draftBox: CaptureBox | null;
 };
 
 type Fish = {
@@ -89,6 +114,8 @@ function captureRowsToCsv(rows: CaptureRow[]): string {
     "fish_species", "session_id", "fish_id", "frame_id", "relative_time_ms", "frame_path", "confirmed_stage",
     "head_status", "head_status_source", "tail_status", "tail_status_source", "hands_visible", "knife_visible", "occlusion", "device_model",
     "camera_view", "lighting", "review_status", "notes", "ai_status", "ai_observation_json",
+    "head_bbox_x", "head_bbox_y", "head_bbox_width", "head_bbox_height", "head_bbox_source",
+    "tail_bbox_x", "tail_bbox_y", "tail_bbox_width", "tail_bbox_height", "tail_bbox_source",
   ];
   return `\uFEFF${columns.join(",")}\r\n${rows.map((row) => columns.map((column) => csvCell(row[column])).join(",")).join("\r\n")}\r\n`;
 }
@@ -247,6 +274,8 @@ function App() {
   const [captureBusy, setCaptureBusy] = useState(false);
   const [captureMessage, setCaptureMessage] = useState("");
   const [captureManifestExported, setCaptureManifestExported] = useState(false);
+  const [pendingCapture, setPendingCapture] = useState<PendingCapture | null>(null);
+  const [captureLabelsConfirmed, setCaptureLabelsConfirmed] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const captureStartedAt = useRef<number | null>(null);
   const cameraRequestId = useRef(0);
@@ -293,14 +322,14 @@ function App() {
   useEffect(() => () => guideRequestController.current?.abort(), []);
 
   useEffect(() => {
-    if (screen !== "capture" || captureRows.length === 0 || captureManifestExported) return;
+    if (screen !== "capture" || (!pendingCapture && (captureRows.length === 0 || captureManifestExported))) return;
     const warnAboutUnsavedLabels = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", warnAboutUnsavedLabels);
     return () => window.removeEventListener("beforeunload", warnAboutUnsavedLabels);
-  }, [captureManifestExported, captureRows.length, screen]);
+  }, [captureManifestExported, captureRows.length, pendingCapture, screen]);
 
   useEffect(() => {
     if (!cameraStream || !videoRef.current) return;
@@ -456,9 +485,13 @@ function App() {
   }
 
   function backFromCapture() {
-    if (captureRows.length > 0 && !captureManifestExported) {
-      const shouldLeave = window.confirm("撮影画像は個別に保存済みですが、CSVのラベル一覧はまだ保存されていません。この画面を閉じますか？");
+    if (pendingCapture || (captureRows.length > 0 && !captureManifestExported)) {
+      const shouldLeave = window.confirm("撮影中の未保存画像、または保存していないCSVラベルがあります。この画面を閉じますか？");
       if (!shouldLeave) return;
+    }
+    if (pendingCapture) {
+      URL.revokeObjectURL(pendingCapture.previewUrl);
+      setPendingCapture(null);
     }
     stopCamera();
     setScreen("select");
@@ -514,22 +547,149 @@ function App() {
         device_model: captureDeviceModel.trim() || "unknown",
         camera_view: captureCameraView,
         lighting: captureLighting,
-        review_status: captureReviewed ? "reviewed" : "needs_review",
+        review_status: "needs_review",
         notes: captureNotes.trim(),
         ai_status: headTailDetection.status,
         ai_observation_json: headTailDetection.observation ? JSON.stringify(headTailDetection.observation) : "",
+        head_bbox_x: "",
+        head_bbox_y: "",
+        head_bbox_width: "",
+        head_bbox_height: "",
+        head_bbox_source: "unknown",
+        tail_bbox_x: "",
+        tail_bbox_y: "",
+        tail_bbox_width: "",
+        tail_bbox_height: "",
+        tail_bbox_source: "unknown",
       };
 
-      downloadCaptureFile(imageBlob, filename);
-      setCaptureRows((rows) => [...rows, row]);
-      setCaptureManifestExported(false);
-      setCaptureReviewed(false);
-      setCaptureMessage(`${filename} を端末へ保存しました。ラベルを確認して次のフレームを撮れます。`);
+      const previewUrl = URL.createObjectURL(imageBlob);
+      setPendingCapture({
+        blob: imageBlob,
+        previewUrl,
+        width: canvas.width,
+        height: canvas.height,
+        row,
+        activePart: "head",
+        headBox: null,
+        tailBox: null,
+        dragStart: null,
+        draftBox: null,
+      });
+      setCaptureLabelsConfirmed(captureReviewed);
+      setCaptureMessage("撮影画像で頭・尾の正解枠を確認してください。AIの枠は自動では正解にしません。");
     } catch {
       setCaptureMessage("画像を保存できませんでした。ブラウザーのダウンロード許可と空き容量を確認してください。");
     } finally {
       setCaptureBusy(false);
     }
+  }
+
+  function annotationPoint(event: ReactPointerEvent<SVGSVGElement>) {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)),
+    };
+  }
+
+  function annotationPointerDown(event: ReactPointerEvent<SVGSVGElement>) {
+    if (!pendingCapture) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const point = annotationPoint(event);
+    setPendingCapture((current) => current ? {
+      ...current,
+      dragStart: point,
+      draftBox: { x: point.x, y: point.y, width: 0, height: 0 },
+    } : current);
+  }
+
+  function annotationPointerMove(event: ReactPointerEvent<SVGSVGElement>) {
+    if (!pendingCapture?.dragStart) return;
+    const point = annotationPoint(event);
+    const start = pendingCapture.dragStart;
+    setPendingCapture((current) => current ? {
+      ...current,
+      draftBox: {
+        x: Math.min(start.x, point.x),
+        y: Math.min(start.y, point.y),
+        width: Math.abs(point.x - start.x),
+        height: Math.abs(point.y - start.y),
+      },
+    } : current);
+  }
+
+  function finishAnnotationPointer(event: ReactPointerEvent<SVGSVGElement>) {
+    if (!pendingCapture?.dragStart) return;
+    const point = annotationPoint(event);
+    const start = pendingCapture.dragStart;
+    const box = {
+      x: Math.min(start.x, point.x),
+      y: Math.min(start.y, point.y),
+      width: Math.abs(point.x - start.x),
+      height: Math.abs(point.y - start.y),
+    };
+    const normalizedBox = box.width >= 0.005 && box.height >= 0.005 ? box : null;
+    setPendingCapture((current) => current ? {
+      ...current,
+      dragStart: null,
+      draftBox: null,
+      headBox: current.activePart === "head" && normalizedBox ? normalizedBox : current.headBox,
+      tailBox: current.activePart === "tail" && normalizedBox ? normalizedBox : current.tailBox,
+    } : current);
+  }
+
+  function cancelAnnotationPointer() {
+    setPendingCapture((current) => current ? { ...current, dragStart: null, draftBox: null } : current);
+  }
+
+  function clearAnnotation(part: CapturePart) {
+    setPendingCapture((current) => current ? {
+      ...current,
+      headBox: part === "head" ? null : current.headBox,
+      tailBox: part === "tail" ? null : current.tailBox,
+    } : current);
+  }
+
+  function normalizedBoxColumns(box: CaptureBox | null) {
+    if (!box) return { x: "", y: "", width: "", height: "", source: "unknown" as const };
+    return {
+      x: box.x.toFixed(6),
+      y: box.y.toFixed(6),
+      width: box.width.toFixed(6),
+      height: box.height.toFixed(6),
+      source: "manual" as const,
+    };
+  }
+
+  function confirmPendingCapture() {
+    if (!pendingCapture) return;
+    const head = normalizedBoxColumns(pendingCapture.headBox);
+    const tail = normalizedBoxColumns(pendingCapture.tailBox);
+    const row: CaptureRow = {
+      ...pendingCapture.row,
+      review_status: captureLabelsConfirmed ? "reviewed" : "needs_review",
+      head_status_source: captureLabelsConfirmed ? "manual" : pendingCapture.row.head_status_source,
+      tail_status_source: captureLabelsConfirmed ? "manual" : pendingCapture.row.tail_status_source,
+      head_bbox_x: head.x,
+      head_bbox_y: head.y,
+      head_bbox_width: head.width,
+      head_bbox_height: head.height,
+      head_bbox_source: head.source,
+      tail_bbox_x: tail.x,
+      tail_bbox_y: tail.y,
+      tail_bbox_width: tail.width,
+      tail_bbox_height: tail.height,
+      tail_bbox_source: tail.source,
+    };
+    downloadCaptureFile(pendingCapture.blob, row.frame_path);
+    setCaptureRows((rows) => [...rows, row]);
+    setCaptureManifestExported(false);
+    setCaptureReviewed(false);
+    setCaptureMessage(`${row.frame_path} を保存しました。枠は人の確認ラベルとしてCSVに記録しました。`);
+    URL.revokeObjectURL(pendingCapture.previewUrl);
+    setPendingCapture(null);
   }
 
   function exportCaptureManifest() {
@@ -807,6 +967,52 @@ function App() {
               {captureRows.length > 0 ? <div className="capture-recent" aria-label="撮影済みの最新フレーム"><strong>撮影済み · 最新{Math.min(3, captureRows.length)}枚</strong>{captureRows.slice(-3).reverse().map((row) => <span key={row.frame_id}>{row.frame_path} · {row.confirmed_stage} · 頭 {row.head_status} / 尾 {row.tail_status}</span>)}</div> : null}
             </div>
           </div>
+          {pendingCapture ? (
+            <div className="capture-annotation-backdrop">
+              <section className="capture-annotation-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-annotation-title">
+                <header className="capture-annotation-heading">
+                  <div><span>人手の正解ラベル</span><h2 id="capture-annotation-title">頭・尾の枠を確認</h2></div>
+                  <button type="button" onClick={backFromCapture} aria-label="撮影画面を閉じる">×</button>
+                </header>
+                <p>画像上をドラッグして枠を描きます。AIの候補は別に保存済みで、ここには自動コピーされません。該当部位が見えない場合は枠を付けず、状態ラベルを「遮蔽・画角外・未確認」から選んでください。</p>
+                <div className="capture-annotation-tools">
+                  <button type="button" className={pendingCapture.activePart === "head" ? "is-active" : ""} onClick={() => setPendingCapture((current) => current ? { ...current, activePart: "head" } : current)}>頭の枠 {pendingCapture.headBox ? "✓" : "未設定"}</button>
+                  <button type="button" className={pendingCapture.activePart === "tail" ? "is-active" : ""} onClick={() => setPendingCapture((current) => current ? { ...current, activePart: "tail" } : current)}>尾の枠 {pendingCapture.tailBox ? "✓" : "未設定"}</button>
+                  <button type="button" onClick={() => clearAnnotation("head")} disabled={!pendingCapture.headBox}>頭を消す</button>
+                  <button type="button" onClick={() => clearAnnotation("tail")} disabled={!pendingCapture.tailBox}>尾を消す</button>
+                </div>
+                <div className="capture-annotation-canvas-wrap">
+                  <svg
+                    className="capture-annotation-image"
+                    viewBox={`0 0 ${pendingCapture.width} ${pendingCapture.height}`}
+                    width={pendingCapture.width}
+                    height={pendingCapture.height}
+                    preserveAspectRatio="none"
+                    role="img"
+                    aria-label="撮影画像。選択した頭または尾の部分をドラッグして囲みます。"
+                    onPointerDown={annotationPointerDown}
+                    onPointerMove={annotationPointerMove}
+                    onPointerUp={finishAnnotationPointer}
+                    onPointerCancel={cancelAnnotationPointer}
+                  >
+                    <image href={pendingCapture.previewUrl} x="0" y="0" width={pendingCapture.width} height={pendingCapture.height} />
+                    {pendingCapture.headBox ? <rect className="capture-box-head" x={pendingCapture.headBox.x * pendingCapture.width} y={pendingCapture.headBox.y * pendingCapture.height} width={pendingCapture.headBox.width * pendingCapture.width} height={pendingCapture.headBox.height * pendingCapture.height} /> : null}
+                    {pendingCapture.tailBox ? <rect className="capture-box-tail" x={pendingCapture.tailBox.x * pendingCapture.width} y={pendingCapture.tailBox.y * pendingCapture.height} width={pendingCapture.tailBox.width * pendingCapture.width} height={pendingCapture.tailBox.height * pendingCapture.height} /> : null}
+                    {pendingCapture.draftBox ? <rect className={`capture-box-draft is-${pendingCapture.activePart}`} x={pendingCapture.draftBox.x * pendingCapture.width} y={pendingCapture.draftBox.y * pendingCapture.height} width={pendingCapture.draftBox.width * pendingCapture.width} height={pendingCapture.draftBox.height * pendingCapture.height} /> : null}
+                  </svg>
+                </div>
+                <label className="capture-annotation-confirm"><input type="checkbox" checked={captureLabelsConfirmed} onChange={(event) => setCaptureLabelsConfirmed(event.currentTarget.checked)} />この画像を見て、工程・頭尾の状態ラベルを確認した（AI候補を採用する場合も人が確認）</label>
+                <footer className="capture-annotation-actions">
+                  <button type="button" onClick={() => {
+                    URL.revokeObjectURL(pendingCapture.previewUrl);
+                    setPendingCapture(null);
+                    setCaptureMessage("撮影画像の保存を取り消しました。");
+                  }}>この画像を破棄</button>
+                  <button type="button" className="is-primary" onClick={confirmPendingCapture}>{captureLabelsConfirmed ? "確認済みとして保存" : "未確認として保存"}</button>
+                </footer>
+              </section>
+            </div>
+          ) : null}
         </section>
       ) : (
         <section className="guide-screen" aria-label={`${chosenFish}のさばきガイド`}>
