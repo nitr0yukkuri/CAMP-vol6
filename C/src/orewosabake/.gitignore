@@ -21,7 +21,17 @@ ml/generated/
 ml/runs/
 ml/output/
 apps/web/public/models/*.tflite
+apps/web/public/mediapipe/wasm/
 data/analysis/mendeley-label-preview.jpg
+# Keep phone-captured samples and per-session exports out of Git.
+/data/phone-capture/**/*.jpg
+/data/phone-capture/**/*.jpeg
+/data/phone-capture/**/*.png
+/data/phone-capture/**/*.webp
+/data/phone-capture/**/*.mp4
+/data/phone-capture/**/*.mov
+/data/phone-capture/**/*.webm
+/data/phone-capture/**/*_capture-manifest.csv
 .wrangler/
 **/.wrangler/
 .dev.vars*
