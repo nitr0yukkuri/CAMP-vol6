@@ -382,7 +382,7 @@ function App() {
               {selectedFishVisualData ? (
               <img className={fishImageClass("hero-fish-photo")} src={fishImage(selectedFishVisualData)} alt={`${selectedFishVisualData.name}のイラスト`} />
               ) : <FishMark />}
-              <span>{selectedFishData?.name ?? "魚を選ぼう"}</span>
+              <span>{selectedFishData?.name ?? (selectedFish === "その他" ? chosenFish : "魚を選ぼう")}</span>
             </div>
             <span className="hero-glow" aria-hidden="true" />
           </header>
