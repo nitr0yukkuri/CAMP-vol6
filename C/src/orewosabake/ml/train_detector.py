@@ -328,7 +328,9 @@ def evaluate_exported_detector(generated_root: Path, output_root: Path) -> dict[
     shutil.copy2(model_path, web_model_path)
 
     report_path = output_root / "metrics.json"
-    report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.is_file() else {}
+    # Rebuild all evaluation fields from the current artifact instead of
+    # carrying training metrics from an older model into --evaluate-only output.
+    report: dict[str, Any] = {}
     summary_path = generated_root / "prepare-summary.json"
     dataset_summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.is_file() else {}
     try:
