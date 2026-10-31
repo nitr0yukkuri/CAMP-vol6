@@ -2,7 +2,7 @@
 
 `C/src/orewosabake` 内だけで作業する、頭・尾検出の学習準備とUIモックです。魚捌き工程を認識するモデルはまだありません。
 
-## UIモックを起動
+## React UIを起動
 
 Node.js `24.22.1` と npm `11.19.1` に固定しています（`.nvmrc` / `packageManager`）。React・React DOMは `19.3.1`、全依存パッケージのバージョンはロックファイルと各workspace manifestで固定しています。
 
@@ -20,7 +20,27 @@ npm run dev:api
 npm run dev:web
 ```
 
-画面は `http://127.0.0.1:5173` です。カメラ権限を要求せず、魚のシルエット・検出枠・スコアをサンプル表示します。検出器の値が工程を進めることはありません。
+画面は `http://127.0.0.1:5173` です。魚の検索・カテゴリ切替・選択から、縦画面の回転案内、横画面のガイドへ進めます。カメラは「俺を捌け！」を押した後にだけ起動し、映像をアップロード・保存しません。カメラを終了すると映像トラックを停止します。
+
+工程ガイドはモックAPIの内容です。頭・尾の位置検出用モデルは未配置で、魚の捌き工程は認識しません。ガイドの工程は利用者が手動で進めます。
+
+## Cloudflare Workersへデプロイ
+
+初回はCloudflareアカウントを接続します。
+
+```powershell
+npx wrangler login
+```
+
+その後、プロジェクトフォルダから実行します。
+
+```powershell
+npm run deploy:cloudflare
+```
+
+React画面と魚画像は静的アセットとして、`/api/*`は同じオリジンのWorkerとして公開します。ローカルの画面確認は`npm run dev:web`で行えます。Node版モックAPIを単独で確認する場合は、従来どおり`npm run dev:api`を使います。
+
+Cloudflareアカウントにログインする前に一時プレビューを作る場合は、`npm run deploy:cloudflare:temporary`を使います。公開URLと引き継ぎリンクが発行され、引き継ぎリンクは60分以内にCloudflareアカウントへ登録する必要があります。
 
 ## API
 

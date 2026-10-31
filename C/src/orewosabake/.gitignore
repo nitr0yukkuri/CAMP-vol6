@@ -22,3 +22,7 @@ ml/runs/
 ml/output/
 apps/web/public/models/*.tflite
 data/analysis/mendeley-label-preview.jpg
+.wrangler/
+**/.wrangler/
+.dev.vars*
+**/.dev.vars*
