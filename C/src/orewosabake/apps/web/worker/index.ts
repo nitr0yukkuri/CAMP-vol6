@@ -15,6 +15,8 @@ import {
 const maxBodyBytes = 16 * 1024;
 const maxGuideSessions = 500;
 const guideSessionTtlMs = 30 * 60 * 1000;
+const sessionCreationBucketCapacity = 10;
+const sessionCreationRefillMs = 10 * 1000;
 
 interface Env {
   GUIDE_SESSIONS: DurableObjectNamespace<GuideSessionStore>;
@@ -107,6 +109,13 @@ export class GuideSessionStore extends DurableObject<Env> {
         updated_at TEXT NOT NULL
       )
     `);
+    ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS guide_session_creation_limits (
+        client_hash TEXT PRIMARY KEY,
+        tokens REAL NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -119,6 +128,46 @@ export class GuideSessionStore extends DurableObject<Env> {
         const body = await readRequestBody(request);
         const parsed = GuideRequestSchema.safeParse(body);
         if (!parsed.success) return validationError();
+
+        const now = Date.now();
+        const clientHash = await hashClientAddress(request.headers.get("cf-connecting-ip") ?? "local-development");
+        const staleLimitCutoff = now - sessionCreationBucketCapacity * sessionCreationRefillMs;
+        this.ctx.storage.sql.exec(
+          "DELETE FROM guide_session_creation_limits WHERE updated_at <= ?",
+          staleLimitCutoff,
+        );
+        const clientLimit = this.ctx.storage.sql.exec<{ tokens: number; updated_at: number }>(
+          "SELECT tokens, updated_at FROM guide_session_creation_limits WHERE client_hash = ?",
+          clientHash,
+        ).toArray()[0];
+        const availableTokens = clientLimit
+          ? Math.min(sessionCreationBucketCapacity, clientLimit.tokens + Math.max(0, now - clientLimit.updated_at) / sessionCreationRefillMs)
+          : sessionCreationBucketCapacity;
+        if (availableTokens < 1) {
+          const retryAfterSeconds = Math.max(1, Math.ceil((1 - availableTokens) * sessionCreationRefillMs / 1000));
+          return new Response(JSON.stringify({ error: {
+            code: "SESSION_RATE_LIMITED",
+            message: "ガイドの開始回数が上限に達しました。少し待ってから再試行してください。",
+            retryAfterSeconds,
+          } }), {
+            status: 429,
+            headers: {
+              "Cache-Control": "no-store",
+              "Content-Type": "application/json; charset=utf-8",
+              "Retry-After": String(retryAfterSeconds),
+            },
+          });
+        }
+        this.ctx.storage.sql.exec(
+          `INSERT INTO guide_session_creation_limits (client_hash, tokens, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(client_hash) DO UPDATE SET
+             tokens = excluded.tokens,
+             updated_at = excluded.updated_at`,
+          clientHash,
+          availableTokens - 1,
+          now,
+        );
 
         const expiryCutoff = new Date(Date.now() - guideSessionTtlMs).toISOString();
         this.ctx.storage.sql.exec("DELETE FROM guide_sessions WHERE updated_at <= ?", expiryCutoff);
@@ -223,6 +272,11 @@ export class GuideSessionStore extends DurableObject<Env> {
   private deleteSession(sessionId: string): void {
     this.ctx.storage.sql.exec("DELETE FROM guide_sessions WHERE session_id = ?", sessionId);
   }
+}
+
+async function hashClientAddress(address: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(address));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function createMockSession(fishId: GuideSession["fishId"], preparationId: GuideSession["preparationId"]): GuideSession {
