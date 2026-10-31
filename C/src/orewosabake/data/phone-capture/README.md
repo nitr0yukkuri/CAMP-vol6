@@ -4,7 +4,7 @@
 
 ## 1. 記録単位
 
-`capture-manifest.csv` は **1行につき1枚の採用フレーム** を記録します。アプリの魚選択画面から「研究用データを撮る」を選び、カメラを起動すると、AIが検出した頭・尾だけ「見える」を仮入力します。工程・手・包丁・遮蔽・撮影条件など、AIが判断できない項目は`unknown`（不明）から始まります。人が候補を直して撮影します。画像は長辺832px以下のJPEGとして個別にブラウザーへダウンロードされ、CSVは「CSVラベル一覧を保存」から出力します。AI候補は人のラベルと区別して記録します。画像やラベルをAPIへ送信しません。
+`capture-manifest.csv` は **1行につき1枚の採用フレーム** を記録します。アプリの魚選択画面から「研究用データを撮る」を選び、カメラを起動すると、AIが検出した頭・尾だけ「見える」を仮入力します。工程・手・包丁・遮蔽・撮影条件など、AIが判断できない項目は`unknown`（不明）から始まります。撮影後、静止画上で頭と尾を人が別々に囲みます。AIの枠は教師ラベルへコピーしません。ラベル確認後に画像（長辺832px以下のJPEG）を個別にブラウザーへダウンロードし、CSVは「CSVラベル一覧を保存」から出力します。画像とラベルをAPIへ送信しません。
 
 スマートフォンで実際に使うにはHTTPSで配信されたURLが必要です。`http://127.0.0.1:5173`は開発PC内だけのアドレスで、スマートフォンからはそのPCを指しません。カメラAPIはHTTPSまたは同じ端末のlocalhostでのみ利用できます。
 
@@ -23,6 +23,7 @@
 - `head_status_source` / `tail_status_source`: `ai_suggestion`, `manual`, `unknown`のいずれか。AI仮入力と人の入力を区別する。
 - `review_status`: 撮影時点でラベルを見直したか。未チェックは`needs_review`。
 - `ai_status` / `ai_observation_json`: 撮影時点のAI処理状態と検出候補（信頼度・正規化バウンディングボックスを含む）。検出が空でも、頭・尾がないことを示すわけではない。人が選んだ状態とは別の情報。
+- `head_bbox_*` / `tail_bbox_*`: 静止画上で人が描いた正規化枠（左上の`x`,`y`と`width`,`height`）。`*_bbox_source=manual`だけが人手枠。AI候補とは別列。
 - `hands_visible` / `knife_visible`: `true`, `false`, `unknown`のいずれか。初期値は`unknown`。
 - `occlusion`: `unknown`, `none`, `hands`, `knife`, `container`, `overlap`, `other`のいずれか。
 - `camera_view`: `unknown`, `overhead`, `oblique`, `side`, `other`のいずれか。
@@ -58,20 +59,50 @@
 1. 魚種を選んで「研究用データを撮る」を開き、カメラ枠の「カメラを起動」を押す。まずスマホ機種、カメラ角度、照明、魚を置く場所を記録する。
 2. 同じ魚を一つの `fish_id` で追い、工程が変わる前後と作業中から代表フレームを採る。試験では連続動画全体を重複フレームのまま保存せず、キー画像を選ぶ。
 3. 手・包丁・水滴・反射・重なり・画面端など、現場の難しい条件も含める。見やすい正面画像だけに偏らせない。
-4. AIの枠は候補として扱う。頭・尾を検出した場合は「見える」を仮入力し、撮影者が確認・訂正する。工程やAI対象外の項目は撮影者が選ぶ。判断できない場合は`unknown`のままにし、検出がないだけで`removed_confirmed`にしない。仮入力元・人の入力元とAI候補はCSVで分けて記録する。
+4. AIの枠は候補として扱う。撮影した静止画で頭と尾をそれぞれ囲み、該当部位が見えないと判断したら枠を付けず、状態を「遮蔽・画角外・未確認」などにします。工程やAI対象外の項目も人が選びます。確認チェックを付けたときだけ状態を人手確認済みとして記録します。検出がないだけで`removed_confirmed`にしません。AI提案と人手枠はCSVの別列に保存されます。
 5. 学習・検証・テストはフレームをランダムに割らず、`fish_id` と `session_id` をまたがない単位で分ける。同じ魚の隣接フレームが別セットに入ると評価が楽観的になる。
 6. 画像は人物の顔や不要な個人情報が入らないようにし、他人が映るときは撮影前に同意を取る。ブラウザーのCanvasからJPEGを生成するため元画像のEXIFは引き継がれないが、配布前には画像とメモを再確認する。
-7. 撮影画像とCSVを同じフォルダーにまとめる。CSVの`frame_path`は画像ファイル名なので、学習用データへ移す際は、実際に置いた相対パスへ更新する。
+7. 撮影画像とCSVを同じフォルダーにまとめる。CSVの`frame_path`は画像ファイル名です。手動枠と状態が確認できた行だけを学習準備に使います。
 
 タブを更新・終了するとCSV行は失われます。撮影後はCSVを保存してからタブを閉じてください。アプリは保存忘れ防止のブラウザー警告を出します。
 
-## 4. CSV値の例
+## 4. 撮影・確認
+
+実端末を使う前に [端末スモークチェック](device-smoke-check.md) を記録します。撮影後の枠付けで指を離した位置と枠がずれる場合、画面回転後に映像が切れる場合、画像またはCSVの保存先が分かりにくい場合は、先にその不具合を記録して直します。人物が映る映像や魚の捌き作業を、研究用の同意なしに第三者へ共有しないでください。
+
+## 5. 魚・撮影回で分けた学習データを準備
+
+撮影CSVとJPEGはリポジトリ外にまとめます。まずグループ一覧を生成します。
+
+```powershell
+python ml/prepare_phone_capture.py `
+  --manifest "D:\fish-pilot\capture-manifest.csv" `
+  --images-dir "D:\fish-pilot" `
+  --output ml/generated/phone-capture/split-plan `
+  --write-split-template
+```
+
+`ml/generated/phone-capture/split-plan/group-split-template.csv` の`split`列へ、各独立グループを`train`、`validation`、`test`のいずれかに割り当てます。魚IDまたは撮影セッションIDを共有する行は同じ連結グループになり、別splitには分けられません。同じ個体を別の日に撮った場合も同じグループにまとまります。独立グループが3つ未満なら、漏洩のない3分割テストはできません。データを集めるまで評価を保留してください。
+
+```powershell
+python ml/prepare_phone_capture.py `
+  --manifest "D:\fish-pilot\capture-manifest.csv" `
+  --images-dir "D:\fish-pilot" `
+  --output ml/generated/phone-capture/converted `
+  --split-map ml/generated/phone-capture/split-plan/group-split-template.csv
+```
+
+変換器は、`reviewed`かつ人が確認した頭・尾の状態、手描き枠を持つ画像だけを採用します。`unknown`、遮蔽、画角外、AI提案のみの枠は除外します。学習用に割り当てた画像には頭と尾のどちらかの人手枠が必要です。各splitに両クラスの正例が揃わない場合は評価データを作りません。COCO形式の出力は無視対象の`ml/generated/phone-capture/converted/coco/`に作成され、既存出力を置換する場合だけ`--force`が必要です。レポートには行数・除外理由・クラス数が出ますが、備考や生のラベル値は含めません。
+
+この変換はCOCOデータを準備する段階までです。既存のMendeley学習結果へスマホ画像を自動で混ぜたり、電話端末で再学習したりはしません。人手データで学習・閾値調整した後は、同じ独立したtestグループで再評価し、スマホ条件ごとに失敗を確認します。
+
+## 6. CSV値の例
 
 `capture-manifest.csv` は列名だけの空テンプレートです。例は実データと混同しないようここに示します。
 
 ```csv
-fish_species,session_id,fish_id,frame_id,relative_time_ms,frame_path,confirmed_stage,head_status,head_status_source,tail_status,tail_status_source,hands_visible,knife_visible,occlusion,device_model,camera_view,lighting,review_status,notes,ai_status,ai_observation_json
-アジ,pilot-2026-10-29-a,fish-001,frame-0001,0,pilot-2026-10-29-a_fish-001_frame-0001.jpg,whole,present_visible,manual,present_visible,manual,unknown,unknown,unknown,unknown,unknown,unknown,reviewed,試し撮りの例,active,""
+fish_species,session_id,fish_id,frame_id,relative_time_ms,frame_path,confirmed_stage,head_status,head_status_source,tail_status,tail_status_source,hands_visible,knife_visible,occlusion,device_model,camera_view,lighting,review_status,notes,ai_status,ai_observation_json,head_bbox_x,head_bbox_y,head_bbox_width,head_bbox_height,head_bbox_source,tail_bbox_x,tail_bbox_y,tail_bbox_width,tail_bbox_height,tail_bbox_source
+アジ,pilot-example-a,fish-001,frame-0001,0,pilot-example-a_fish-001_frame-0001.jpg,whole,present_visible,manual,present_visible,manual,unknown,unknown,unknown,unknown,unknown,unknown,reviewed,説明用のみ,active,"",0.1,0.2,0.2,0.3,manual,0.7,0.4,0.1,0.2,manual
 ```
 
-例の行は説明用で、実際に撮影したデータではありません。
+例の行は説明用で、実際に撮影したデータではありません。撮影した画像・映像は追跡しないでください。
