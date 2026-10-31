@@ -1,15 +1,42 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AdvanceGuideStepRequestSchema, GuideContextRequestSchema, GuideRequestSchema, GuideSessionSchema, MOCK_GUIDE, type FishCategory, type Guide, type GuideContextRequest, type GuideRequest, type GuideSession, type Observation } from "@orewosabake/contracts";
-import { useHeadTailDetection } from "./hooks/useHeadTailDetection";
+import { useHeadTailDetection, type HeadTailDetectionStatus } from "./hooks/useHeadTailDetection";
 
 type Category = "よく使う" | "海水魚" | "淡水魚" | "甲殻類";
-type Screen = "select" | "guide";
+type Screen = "select" | "guide" | "capture";
 type CameraStatus = "idle" | "starting" | "active" | "denied" | "unavailable" | "error";
+type CaptureStage = "whole" | "head_removed" | "gutted" | "filleting" | "finished" | "other" | "unknown";
+type PartVisibility = "present_visible" | "removed_confirmed" | "occluded" | "out_of_frame" | "unknown";
+type PresenceStatus = "true" | "false" | "unknown";
+type CaptureLabelSource = "unknown" | "ai_suggestion" | "manual";
+
+type CaptureRow = {
+  fish_species: string;
+  session_id: string;
+  fish_id: string;
+  frame_id: string;
+  relative_time_ms: number;
+  frame_path: string;
+  confirmed_stage: CaptureStage;
+  head_status: PartVisibility;
+  head_status_source: CaptureLabelSource;
+  tail_status: PartVisibility;
+  tail_status_source: CaptureLabelSource;
+  hands_visible: PresenceStatus;
+  knife_visible: PresenceStatus;
+  occlusion: string;
+  device_model: string;
+  camera_view: string;
+  lighting: string;
+  review_status: "reviewed" | "needs_review";
+  notes: string;
+  ai_status: HeadTailDetectionStatus;
+  ai_observation_json: string;
+};
 
 type Fish = {
   name: string;
   category: Exclude<Category, "よく使う">;
-  note: string;
   mascot: string;
   searchAliases?: string[];
   popular?: boolean;
@@ -17,31 +44,69 @@ type Fish = {
 
 const categories: Category[] = ["よく使う", "海水魚", "淡水魚", "甲殻類"];
 const fishList: Fish[] = [
-  { name: "マグロ", category: "海水魚", note: "大型魚 / 海水", mascot: "maguro", popular: true },
-  { name: "サーモン", category: "海水魚", note: "切り身でも人気", mascot: "salmon", popular: true },
-  { name: "アジ", category: "海水魚", note: "定番 / 海水", mascot: "aji", popular: true },
-  { name: "サバ", category: "海水魚", note: "定番 / 海水", mascot: "saba", popular: true },
-  { name: "タイ", category: "海水魚", note: "定番 / 海水", mascot: "tai", searchAliases: ["鯛", "たい"] },
-  { name: "鮎", category: "淡水魚", note: "定番 / 淡水", mascot: "ayu", searchAliases: ["アユ", "あゆ"] },
-  { name: "エビ", category: "甲殻類", note: "下処理ガイド", mascot: "ebi" },
-  { name: "カニ", category: "甲殻類", note: "下処理ガイド", mascot: "kani" },
-  { name: "イカ", category: "海水魚", note: "海水", mascot: "ika" },
-  { name: "タコ", category: "海水魚", note: "海水", mascot: "tako" },
-  { name: "はまち", category: "海水魚", note: "海水", mascot: "hamachi", searchAliases: ["ハマチ"] },
-  { name: "イワシ", category: "海水魚", note: "海水", mascot: "iwashi" },
-  { name: "ぶり", category: "海水魚", note: "海水", mascot: "buri", searchAliases: ["ブリ"] },
-  { name: "カツオ", category: "海水魚", note: "海水", mascot: "katsuo" },
-  { name: "ヒラメ", category: "海水魚", note: "海水", mascot: "hirame" },
-  { name: "カレイ", category: "海水魚", note: "海水", mascot: "karei" },
-  { name: "ウナギ", category: "淡水魚", note: "淡水", mascot: "unagi" },
-  { name: "アナゴ", category: "海水魚", note: "海水", mascot: "anago" },
-  { name: "はも", category: "海水魚", note: "海水", mascot: "hamo", searchAliases: ["ハモ"] },
-  { name: "太刀魚", category: "海水魚", note: "海水", mascot: "tachiuo", searchAliases: ["タチウオ"] },
-  { name: "カワハギ", category: "海水魚", note: "海水", mascot: "kawahagi" },
+  { name: "マグロ", category: "海水魚", mascot: "maguro", popular: true },
+  { name: "サーモン", category: "海水魚", mascot: "salmon", popular: true },
+  { name: "ハマチ", category: "海水魚", mascot: "hamachi", searchAliases: ["はまち"], popular: true },
+  { name: "アジ", category: "海水魚", mascot: "aji", popular: true },
+  { name: "サバ", category: "海水魚", mascot: "saba", popular: true },
+  { name: "タイ", category: "海水魚", mascot: "tai", searchAliases: ["鯛", "たい"] },
+  { name: "鮎", category: "淡水魚", mascot: "ayu", searchAliases: ["アユ", "あゆ"] },
+  { name: "エビ", category: "甲殻類", mascot: "ebi" },
+  { name: "カニ", category: "甲殻類", mascot: "kani" },
+  { name: "イカ", category: "海水魚", mascot: "ika" },
+  { name: "タコ", category: "海水魚", mascot: "tako" },
+  { name: "イワシ", category: "海水魚", mascot: "iwashi" },
+  { name: "ぶり", category: "海水魚", mascot: "buri", searchAliases: ["ブリ"] },
+  { name: "カツオ", category: "海水魚", mascot: "katsuo" },
+  { name: "ヒラメ", category: "海水魚", mascot: "hirame" },
+  { name: "カレイ", category: "海水魚", mascot: "karei" },
+  { name: "ウナギ", category: "淡水魚", mascot: "unagi" },
+  { name: "アナゴ", category: "海水魚", mascot: "anago" },
+  { name: "はも", category: "海水魚", mascot: "hamo", searchAliases: ["ハモ"] },
+  { name: "太刀魚", category: "海水魚", mascot: "tachiuo", searchAliases: ["タチウオ"] },
+  { name: "カワハギ", category: "海水魚", mascot: "kawahagi" },
 ];
 
+const MAX_CAPTURE_FRAMES = 60;
+const MAX_CAPTURE_FRAME_DIMENSION = 832;
+const CAPTURE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+function createCaptureSessionId(): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const suffix = Math.random().toString(36).slice(2, 6);
+  return `pilot-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}-${suffix}`;
+}
+
+function csvCell(value: string | number | boolean): string {
+  let text = String(value);
+  if (/^[=+\-@\t\r\n]/.test(text)) text = `'${text}`;
+  return `"${text.replaceAll('"', '""')}"`;
+}
+
+function captureRowsToCsv(rows: CaptureRow[]): string {
+  const columns: Array<keyof CaptureRow> = [
+    "fish_species", "session_id", "fish_id", "frame_id", "relative_time_ms", "frame_path", "confirmed_stage",
+    "head_status", "head_status_source", "tail_status", "tail_status_source", "hands_visible", "knife_visible", "occlusion", "device_model",
+    "camera_view", "lighting", "review_status", "notes", "ai_status", "ai_observation_json",
+  ];
+  return `\uFEFF${columns.join(",")}\r\n${rows.map((row) => columns.map((column) => csvCell(row[column])).join(",")).join("\r\n")}\r\n`;
+}
+
+function downloadCaptureFile(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = "none";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 function fishImage(fish: Fish): string {
-  return `/fish-mascots/${fish.mascot}.png`;
+  return `/fish-mascots-transparent/${fish.mascot}.png`;
 }
 
 function fishImageClass(baseClass: string): string {
@@ -130,6 +195,14 @@ function CameraPlaceholderIcon() {
   );
 }
 
+function CameraStopIcon() {
+  return (
+    <svg className="camera-stop-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="currentColor" />
+    </svg>
+  );
+}
+
 function RotatePhoneIcon() {
   return (
     <svg viewBox="0 0 150 130" aria-hidden="true">
@@ -144,7 +217,7 @@ function App() {
   const [screen, setScreen] = useState<Screen>("select");
   const [category, setCategory] = useState<Category>("よく使う");
   const [search, setSearch] = useState("");
-  const [selectedFish, setSelectedFish] = useState("アジ");
+  const [selectedFish, setSelectedFish] = useState("ハマチ");
   const [guide, setGuide] = useState<Guide>(MOCK_GUIDE);
   const [guideSession, setGuideSession] = useState<GuideSession | null>(null);
   const [guideSessionLoading, setGuideSessionLoading] = useState(false);
@@ -154,16 +227,79 @@ function App() {
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("idle");
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [cameraMessage, setCameraMessage] = useState("");
+  const [captureSessionId, setCaptureSessionId] = useState(createCaptureSessionId);
+  const [captureFishId, setCaptureFishId] = useState("fish-001");
+  const [captureStage, setCaptureStage] = useState<CaptureStage>("unknown");
+  const [captureHeadStatus, setCaptureHeadStatus] = useState<PartVisibility>("unknown");
+  const [captureHeadStatusSource, setCaptureHeadStatusSource] = useState<CaptureLabelSource>("unknown");
+  const [captureTailStatus, setCaptureTailStatus] = useState<PartVisibility>("unknown");
+  const [captureTailStatusSource, setCaptureTailStatusSource] = useState<CaptureLabelSource>("unknown");
+  const [captureHandsVisible, setCaptureHandsVisible] = useState<PresenceStatus>("unknown");
+  const [captureKnifeVisible, setCaptureKnifeVisible] = useState<PresenceStatus>("unknown");
+  const [captureOcclusion, setCaptureOcclusion] = useState("unknown");
+  const [captureDeviceModel, setCaptureDeviceModel] = useState("");
+  const [captureCameraView, setCaptureCameraView] = useState("unknown");
+  const [captureLighting, setCaptureLighting] = useState("unknown");
+  const [captureReviewed, setCaptureReviewed] = useState(false);
+  const [captureNotes, setCaptureNotes] = useState("");
+  const [captureRows, setCaptureRows] = useState<CaptureRow[]>([]);
+  const [captureBusy, setCaptureBusy] = useState(false);
+  const [captureMessage, setCaptureMessage] = useState("");
+  const [captureManifestExported, setCaptureManifestExported] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const captureStartedAt = useRef<number | null>(null);
   const cameraRequestId = useRef(0);
   const guideRequestController = useRef<AbortController | null>(null);
   const guideAdvanceInFlight = useRef(false);
   const headTailDetection = useHeadTailDetection(
     videoRef,
-    screen === "guide" && cameraStatus === "active" && cameraStream !== null,
+    (screen === "guide" || screen === "capture") && cameraStatus === "active" && cameraStream !== null,
   );
 
+  useEffect(() => {
+    if (screen !== "capture") return;
+    const visibleParts = new Set(headTailDetection.observation?.detections.map((detection) => detection.label) ?? []);
+    let suggested = false;
+
+    if (captureHeadStatusSource !== "manual") {
+      const nextStatus = visibleParts.has("head") ? "present_visible" : "unknown";
+      const nextSource = visibleParts.has("head") ? "ai_suggestion" : "unknown";
+      if (captureHeadStatus !== nextStatus || captureHeadStatusSource !== nextSource) {
+        setCaptureHeadStatus(nextStatus);
+        setCaptureHeadStatusSource(nextSource);
+        suggested = true;
+      }
+    }
+    if (captureTailStatusSource !== "manual") {
+      const nextStatus = visibleParts.has("tail") ? "present_visible" : "unknown";
+      const nextSource = visibleParts.has("tail") ? "ai_suggestion" : "unknown";
+      if (captureTailStatus !== nextStatus || captureTailStatusSource !== nextSource) {
+        setCaptureTailStatus(nextStatus);
+        setCaptureTailStatusSource(nextSource);
+        suggested = true;
+      }
+    }
+    if (suggested) setCaptureReviewed(false);
+  }, [
+    captureHeadStatus,
+    captureHeadStatusSource,
+    captureTailStatus,
+    captureTailStatusSource,
+    headTailDetection.observation,
+    screen,
+  ]);
+
   useEffect(() => () => guideRequestController.current?.abort(), []);
+
+  useEffect(() => {
+    if (screen !== "capture" || captureRows.length === 0 || captureManifestExported) return;
+    const warnAboutUnsavedLabels = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnAboutUnsavedLabels);
+    return () => window.removeEventListener("beforeunload", warnAboutUnsavedLabels);
+  }, [captureManifestExported, captureRows.length, screen]);
 
   useEffect(() => {
     if (!cameraStream || !videoRef.current) return;
@@ -253,7 +389,9 @@ function App() {
     setCameraMessage("");
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraStatus("unavailable");
-      setCameraMessage("このブラウザーではカメラを利用できません。画面だけでガイドを確認できます。");
+      setCameraMessage(screen === "capture"
+        ? "このブラウザーではカメラを利用できません。撮影にはカメラ対応ブラウザーをご利用ください。"
+        : "このブラウザーではカメラを利用できません。画面だけでガイドを確認できます。");
       return;
     }
 
@@ -268,6 +406,7 @@ function App() {
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
+      if (screen === "capture" && captureStartedAt.current === null) captureStartedAt.current = performance.now();
       setCameraStream(stream);
       setCameraStatus("active");
     } catch (error) {
@@ -275,7 +414,9 @@ function App() {
       const denied = error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "PermissionDeniedError");
       setCameraStatus(denied ? "denied" : "error");
       setCameraMessage(denied
-        ? "カメラへのアクセスが許可されませんでした。画面だけでガイドを見ることもできます。"
+        ? screen === "capture"
+          ? "カメラへのアクセスが許可されていません。ブラウザー設定で許可してから再試行してください。"
+          : "カメラへのアクセスが許可されませんでした。画面だけでガイドを見ることもできます。"
         : "カメラを起動できませんでした。端末の設定を確認して、もう一度お試しください。");
     }
   }
@@ -285,6 +426,114 @@ function App() {
     cameraStream?.getTracks().forEach((track) => track.stop());
     setCameraStream(null);
     setCameraStatus("idle");
+    setCameraMessage("");
+  }
+
+  function startCapture() {
+    setCaptureSessionId(createCaptureSessionId());
+    setCaptureRows([]);
+    setCaptureManifestExported(false);
+    setCaptureMessage("");
+    setCameraMessage("");
+    setCaptureStage("unknown");
+    setCaptureHeadStatus("unknown");
+    setCaptureHeadStatusSource("unknown");
+    setCaptureTailStatus("unknown");
+    setCaptureTailStatusSource("unknown");
+    setCaptureHandsVisible("unknown");
+    setCaptureKnifeVisible("unknown");
+    setCaptureOcclusion("unknown");
+    setCaptureCameraView("unknown");
+    setCaptureLighting("unknown");
+    setCaptureNotes("");
+    setCaptureReviewed(false);
+    captureStartedAt.current = null;
+    setScreen("capture");
+  }
+
+  function backFromCapture() {
+    if (captureRows.length > 0 && !captureManifestExported) {
+      const shouldLeave = window.confirm("撮影画像は個別に保存済みですが、CSVのラベル一覧はまだ保存されていません。この画面を閉じますか？");
+      if (!shouldLeave) return;
+    }
+    stopCamera();
+    setScreen("select");
+  }
+
+  async function saveCaptureFrame() {
+    const video = videoRef.current;
+    if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.videoWidth < 1 || video.videoHeight < 1) {
+      setCaptureMessage("カメラ映像の準備ができるまで待ってください。");
+      return;
+    }
+    if (!CAPTURE_ID_PATTERN.test(captureSessionId) || !CAPTURE_ID_PATTERN.test(captureFishId)) {
+      setCaptureMessage("撮影IDと魚IDは英数字、ピリオド、ハイフン、アンダースコアで入力してください。");
+      return;
+    }
+    if (captureRows.length >= MAX_CAPTURE_FRAMES) {
+      setCaptureMessage(`1セッションの上限${MAX_CAPTURE_FRAMES}枚に達しました。CSVを保存してください。`);
+      return;
+    }
+
+    setCaptureBusy(true);
+    setCaptureMessage("");
+    try {
+      const scale = Math.min(1, MAX_CAPTURE_FRAME_DIMENSION / Math.max(video.videoWidth, video.videoHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+      canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+      const context = canvas.getContext("2d", { alpha: false });
+      if (!context) throw new Error("2D canvas is unavailable");
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageBlob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Could not encode capture frame")), "image/jpeg", 0.88);
+      });
+
+      const nextFrameNumber = captureRows.length + 1;
+      const frameId = `frame-${String(nextFrameNumber).padStart(4, "0")}`;
+      const filename = `${captureSessionId}_${captureFishId}_${frameId}.jpg`;
+      const row: CaptureRow = {
+        fish_species: chosenFish,
+        session_id: captureSessionId,
+        fish_id: captureFishId,
+        frame_id: frameId,
+        relative_time_ms: Math.max(0, Math.round(performance.now() - (captureStartedAt.current ?? performance.now()))),
+        frame_path: filename,
+        confirmed_stage: captureStage,
+        head_status: captureHeadStatus,
+        head_status_source: captureHeadStatusSource,
+        tail_status: captureTailStatus,
+        tail_status_source: captureTailStatusSource,
+        hands_visible: captureHandsVisible,
+        knife_visible: captureKnifeVisible,
+        occlusion: captureOcclusion,
+        device_model: captureDeviceModel.trim() || "unknown",
+        camera_view: captureCameraView,
+        lighting: captureLighting,
+        review_status: captureReviewed ? "reviewed" : "needs_review",
+        notes: captureNotes.trim(),
+        ai_status: headTailDetection.status,
+        ai_observation_json: headTailDetection.observation ? JSON.stringify(headTailDetection.observation) : "",
+      };
+
+      downloadCaptureFile(imageBlob, filename);
+      setCaptureRows((rows) => [...rows, row]);
+      setCaptureManifestExported(false);
+      setCaptureMessage(`${filename} を端末へ保存しました。ラベルを確認して次のフレームを撮れます。`);
+    } catch {
+      setCaptureMessage("画像を保存できませんでした。ブラウザーのダウンロード許可と空き容量を確認してください。");
+    } finally {
+      setCaptureBusy(false);
+    }
+  }
+
+  function exportCaptureManifest() {
+    if (captureRows.length === 0) return;
+    const csv = captureRowsToCsv(captureRows);
+    const safeSessionId = CAPTURE_ID_PATTERN.test(captureSessionId) ? captureSessionId : "fish-capture";
+    downloadCaptureFile(new Blob([csv], { type: "text/csv;charset=utf-8" }), `${safeSessionId}_capture-manifest.csv`);
+    setCaptureManifestExported(true);
+    setCaptureMessage("CSVを保存しました。画像とCSVを同じフォルダーに置いてください。");
   }
 
   function backToFishSelection() {
@@ -340,19 +589,8 @@ function App() {
     }
   }
 
-  const cameraLabel = cameraStatus === "active"
-    ? "カメラ稼働中"
-    : cameraStatus === "starting"
-      ? "カメラ起動中"
-      : cameraStatus === "denied"
-        ? "カメラの許可が必要"
-        : cameraStatus === "unavailable"
-          ? "カメラ非対応"
-          : cameraStatus === "error"
-            ? "カメラ起動失敗"
-            : "カメラ未接続";
   const detectionTitle = headTailDetection.status === "active"
-    ? "MediaPipeで頭・尾を確認中"
+    ? "MediaPipe試験モデルで頭・尾を確認中"
     : headTailDetection.status === "loading"
       ? "認識モデルを準備中"
       : headTailDetection.status === "paused"
@@ -369,7 +607,7 @@ function App() {
     : headTailDetection.message;
 
   return (
-    <main className={`app-root ${screen === "guide" ? "is-guide" : ""}`}>
+    <main className={`app-root ${screen === "guide" ? "is-guide" : screen === "capture" ? "is-capture" : ""}`}>
       {screen === "select" ? (
         <section className="selector-screen" aria-label="魚を選ぶ">
           <header className="hero">
@@ -380,7 +618,6 @@ function App() {
               {selectedFishVisualData ? (
               <img className={fishImageClass("hero-fish-photo")} src={fishImage(selectedFishVisualData)} alt={`${selectedFishVisualData.name}のイラスト`} />
               ) : <FishMark />}
-              <span>{selectedFishData?.name ?? (selectedFish === "その他" ? chosenFish : "魚を選ぼう")}</span>
             </div>
           </header>
 
@@ -426,7 +663,7 @@ function App() {
                   <span className="fish-card-image-frame" aria-hidden="true">
                     <img className={fishImageClass("fish-card-photo")} src={fishImage(fish)} alt="" loading="lazy" />
                   </span>
-                  <div className="fish-card-copy"><strong>{fish.name}</strong><span>{fish.note}</span></div>
+                  <div className="fish-card-copy"><strong>{fish.name}</strong></div>
                 </button>
               ))}
               {category === "よく使う" && !search ? (
@@ -437,28 +674,130 @@ function App() {
                   aria-pressed={selectedFish === "その他"}
                 >
                   <strong>ほかの魚を探す</strong>
-                  <span>深海魚・エビ・カニなど</span>
                 </button>
               ) : null}
               {matchingFish.length === 0 && search ? (
                 <button type="button" className={`fish-card fish-card--other${selectedFish === "その他" ? " is-selected" : ""}`} onClick={() => setSelectedFish("その他")} aria-pressed={selectedFish === "その他"}>
                   <strong>「{search}」で進む</strong>
-                  <span>魚名をそのまま指定</span>
                 </button>
               ) : null}
               {matchingFish.length === 0 && !search ? <p className="empty-fish">このカテゴリの魚は準備中です。</p> : null}
             </div>
 
             <button className="start-button" type="button" disabled={!fishCanContinue} onClick={() => void startGuide()}>
-              <strong>ガイドを始める</strong>
-              <span>カメラを起動 · 手順は全ての魚に共通</span>
+              <strong>俺を捌け！</strong>
+              <span>カメラを起動・手順は全ての魚に共通</span>
             </button>
+            <button className="capture-entry-button" type="button" disabled={!fishCanContinue} onClick={startCapture}>
+              研究用データを撮る
+            </button>
+          </div>
+        </section>
+      ) : screen === "capture" ? (
+        <section className="capture-screen" aria-label="研究用データ撮影">
+          <header className="capture-header">
+            <button className="back-link" type="button" onClick={backFromCapture} aria-label="魚の選択に戻る">←</button>
+            <div className="guide-brand"><strong>研究用データ収集</strong><span>{chosenFish} · カメラ画像はアップロードされません</span></div>
+          </header>
+
+          <p className="capture-intro">AIの頭・尾候補を確認し、人がラベルを選んで撮影します。画像は端末に保存し、AI候補と選択ラベルをCSVに記録します。</p>
+
+          <div className="capture-layout">
+            <section className="camera-card capture-camera-card" aria-label="AI撮影プレビュー">
+              <div className="capture-preview">
+                <div className="camera-topline"><span>AIライブプレビュー</span><span>映像は端末内で処理</span></div>
+                {cameraStream ? (
+                  <>
+                    <video ref={videoRef} autoPlay muted playsInline aria-label="AIが確認するカメラ映像" />
+                    {headTailDetection.observation && videoRef.current && videoRef.current.videoWidth > 0 ? (
+                      <DetectionOverlay
+                        observation={headTailDetection.observation}
+                        width={videoRef.current.videoWidth}
+                        height={videoRef.current.videoHeight}
+                        fit="contain"
+                      />
+                    ) : null}
+                  </>
+                ) : (
+                  <div className="camera-placeholder">
+                    <CameraPlaceholderIcon />
+                    <p>{cameraStatus === "starting" ? "カメラを起動しています…" : cameraMessage || "撮影を始めるにはカメラを起動してください"}</p>
+                    {cameraStatus !== "starting" ? <button type="button" onClick={() => void startCamera()}>{cameraStatus === "error" || cameraStatus === "denied" || cameraStatus === "unavailable" ? "カメラを再試行" : "カメラを起動"}</button> : null}
+                  </div>
+                )}
+              </div>
+              <div className="capture-camera-actions">
+                <span>{captureRows.length} / {MAX_CAPTURE_FRAMES} 枚 保存済み</span>
+                <button type="button" onClick={() => void saveCaptureFrame()} disabled={cameraStatus !== "active" || captureBusy || captureRows.length >= MAX_CAPTURE_FRAMES}>
+                  {captureBusy ? "保存中…" : "撮影して保存"}
+                </button>
+                {cameraStatus === "active" ? <button className="capture-stop-button" type="button" onClick={stopCamera} aria-label="カメラを停止"><CameraStopIcon /></button> : null}
+              </div>
+            </section>
+
+            <div className="capture-panel">
+              <div className="capture-panel-heading"><div><span>AI候補を人が確認</span><h1>撮影ラベル</h1></div><span>不明のまま保存できます</span></div>
+              <div className="observation-note capture-ai-note" data-state={headTailDetection.status} aria-live="off">
+                <span>AI</span>
+                <p>
+                  <strong>{detectionTitle}</strong>
+                  <small>{detectionResult}</small>
+                  <small>検出した頭・尾だけ「見える」を仮入力します。工程や他の項目は対象外なので、不明から始まります。検出なしは切除済みを意味しません。</small>
+                </p>
+              </div>
+              <div className="capture-field-grid">
+                <label className="capture-field"><span>撮影セッションID</span><input value={captureSessionId} onChange={(event) => setCaptureSessionId(event.currentTarget.value)} maxLength={64} disabled={captureRows.length > 0} /></label>
+                <label className="capture-field"><span>魚ID（同じ魚は同じID）</span><input value={captureFishId} onChange={(event) => setCaptureFishId(event.currentTarget.value)} maxLength={64} /></label>
+                <label className="capture-field"><span>魚種</span><input value={chosenFish} readOnly /></label>
+                <label className="capture-field"><span>確認した工程</span><select value={captureStage} onChange={(event) => { setCaptureStage(event.currentTarget.value as CaptureStage); setCaptureReviewed(false); }}>
+                  <option value="unknown">未確認</option><option value="whole">未処理</option><option value="head_removed">頭を外した</option><option value="gutted">内臓処理済み</option><option value="filleting">身を分けている途中</option><option value="finished">工程完了</option><option value="other">その他</option>
+                </select></label>
+                <label className="capture-field"><span>頭の状態{captureHeadStatusSource === "ai_suggestion" ? " · AI仮入力" : ""}</span><select value={captureHeadStatus} onChange={(event) => { setCaptureHeadStatus(event.currentTarget.value as PartVisibility); setCaptureHeadStatusSource("manual"); setCaptureReviewed(false); }}>
+                  <option value="unknown">未確認</option><option value="present_visible">付いている・見える</option><option value="removed_confirmed">切除済みと確認</option><option value="occluded">遮蔽されている</option><option value="out_of_frame">画角外</option>
+                </select></label>
+                <label className="capture-field"><span>尾の状態{captureTailStatusSource === "ai_suggestion" ? " · AI仮入力" : ""}</span><select value={captureTailStatus} onChange={(event) => { setCaptureTailStatus(event.currentTarget.value as PartVisibility); setCaptureTailStatusSource("manual"); setCaptureReviewed(false); }}>
+                  <option value="unknown">未確認</option><option value="present_visible">付いている・見える</option><option value="removed_confirmed">切除済みと確認</option><option value="occluded">遮蔽されている</option><option value="out_of_frame">画角外</option>
+                </select></label>
+                <label className="capture-field"><span>遮蔽の主な理由</span><select value={captureOcclusion} onChange={(event) => { setCaptureOcclusion(event.currentTarget.value); setCaptureReviewed(false); }}>
+                  <option value="unknown">不明</option><option value="none">なし</option><option value="hands">手</option><option value="knife">包丁</option><option value="container">容器・器具</option><option value="overlap">魚や物との重なり</option><option value="other">その他</option>
+                </select></label>
+                <label className="capture-field"><span>カメラ角度</span><select value={captureCameraView} onChange={(event) => { setCaptureCameraView(event.currentTarget.value); setCaptureReviewed(false); }}>
+                  <option value="unknown">不明</option><option value="overhead">真上</option><option value="oblique">斜め上</option><option value="side">横</option><option value="other">その他</option>
+                </select></label>
+                <label className="capture-field"><span>照明</span><select value={captureLighting} onChange={(event) => { setCaptureLighting(event.currentTarget.value); setCaptureReviewed(false); }}>
+                  <option value="unknown">不明</option><option value="daylight">自然光</option><option value="indoor-led">室内LED</option><option value="dim">暗め</option><option value="other">その他</option>
+                </select></label>
+                <label className="capture-field"><span>端末機種（任意）</span><input value={captureDeviceModel} onChange={(event) => { setCaptureDeviceModel(event.currentTarget.value); setCaptureReviewed(false); }} maxLength={120} placeholder="不明（任意）" /></label>
+              </div>
+
+              <div className="capture-checks">
+                <label><input type="checkbox" checked={captureReviewed} onChange={(event) => setCaptureReviewed(event.currentTarget.checked)} />このラベルを見直した</label>
+              </div>
+              <div className="capture-field-grid capture-presence-grid">
+                <label className="capture-field"><span>手の映り込み</span><select value={captureHandsVisible} onChange={(event) => { setCaptureHandsVisible(event.currentTarget.value as PresenceStatus); setCaptureReviewed(false); }}><option value="unknown">不明</option><option value="true">映っている</option><option value="false">映っていない</option></select></label>
+                <label className="capture-field"><span>包丁の映り込み</span><select value={captureKnifeVisible} onChange={(event) => { setCaptureKnifeVisible(event.currentTarget.value as PresenceStatus); setCaptureReviewed(false); }}><option value="unknown">不明</option><option value="true">映っている</option><option value="false">映っていない</option></select></label>
+              </div>
+              <label className="capture-field"><span>メモ（任意）</span><textarea value={captureNotes} onChange={(event) => setCaptureNotes(event.currentTarget.value)} maxLength={500} rows={2} placeholder="反射、画角、作業中など" /></label>
+              <p className="capture-label-hint">頭や尾が映らないだけでは「切除済み」にしないでください。隠れている場合は「遮蔽」、画面外なら「画角外」、判断できなければ「未確認」を選びます。</p>
+
+              <div className="capture-export-row">
+                <button className="capture-export-button" type="button" onClick={exportCaptureManifest} disabled={captureRows.length === 0}>CSVラベル一覧を保存</button>
+                <span>{captureRows.length ? `${captureRows.length} 枚分のラベル` : "撮影すると保存できます"}</span>
+              </div>
+              {captureMessage ? <p className="capture-message" role="status" aria-live="polite">{captureMessage}</p> : null}
+              {captureRows.length > 0 ? <div className="capture-recent" aria-label="撮影済みの最新フレーム"><strong>撮影済み · 最新{Math.min(3, captureRows.length)}枚</strong>{captureRows.slice(-3).reverse().map((row) => <span key={row.frame_id}>{row.frame_path} · {row.confirmed_stage} · 頭 {row.head_status} / 尾 {row.tail_status}</span>)}</div> : null}
+            </div>
           </div>
         </section>
       ) : (
         <section className="guide-screen" aria-label={`${chosenFish}のさばきガイド`}>
           <div className="orientation-screen">
-            <div className="orientation-top"><strong>俺を捌け！</strong><span>{cameraLabel}</span></div>
+            <div className="orientation-top">
+              <button className="orientation-back" type="button" onClick={backToFishSelection} aria-label="魚の選択に戻る">
+                <span aria-hidden="true">←</span><span>魚の選択に戻る</span>
+              </button>
+              <strong>俺を捌け！</strong>
+            </div>
             <div className="orientation-main">
               <RotatePhoneIcon />
               <h1>画面を横に<br />してください</h1>
@@ -467,63 +806,84 @@ function App() {
               <p className="orientation-hint">工程の自動判定はありません。画面の手順を確認して進めてください。</p>
             </div>
             {cameraMessage ? <p className="orientation-message" role="status">{cameraMessage}</p> : null}
-            <button className="orientation-back" type="button" onClick={backToFishSelection}>魚の選択に戻る</button>
             {cameraStatus === "active" ? (
-              <button className="camera-stop" type="button" onClick={stopCamera}>カメラを停止</button>
+              <button className="camera-stop" type="button" onClick={stopCamera} aria-label="カメラを停止"><CameraStopIcon /></button>
             ) : null}
           </div>
 
           <div className="landscape-screen">
             <header className="guide-header">
-              <button className="back-link" type="button" onClick={backToFishSelection} aria-label="魚の選択に戻る">←</button>
-              <div className="guide-brand"><strong>俺を捌け！</strong><span>{chosenFish}</span></div>
-              <span className={`camera-badge ${cameraStatus === "active" ? "is-live" : ""}`}><i />{cameraLabel}</span>
+              <button className="back-link" type="button" onClick={backToFishSelection} aria-label="魚の選択に戻る">
+                <span aria-hidden="true">←</span><span className="back-link-label">魚の選択に戻る</span>
+              </button>
+              <div className="guide-brand"><strong>{chosenFish}先生のさばきガイド</strong></div>
+              <div className="guide-header-progress" aria-label={`工程 ${activeStep + 1} / ${guide.steps.length}`}>
+                <strong>STEP {activeStep + 1} / {guide.steps.length}</strong>
+                <div className="guide-progress" aria-hidden="true">
+                  {guide.steps.map((step, index) => <span key={step.id} className={index <= activeStep ? "is-active" : ""} />)}
+                </div>
+              </div>
+              {cameraStatus === "active" ? <button className="camera-stop-inline" type="button" onClick={stopCamera} aria-label="カメラを停止"><CameraStopIcon /></button> : null}
             </header>
 
             <div className="guide-layout">
-              <section className="camera-card" aria-label="カメラプレビュー">
-                <div className="camera-topline"><span>カメラプレビュー</span><span>映像は送信されません</span></div>
-                {cameraStream ? (
-                  <video ref={videoRef} autoPlay muted playsInline aria-label="カメラ映像" />
-                ) : (
-                  <div className="camera-placeholder">
-                    <CameraPlaceholderIcon />
-                    <p>{cameraStatus === "starting" ? "カメラを起動しています…" : "カメラ映像はここに表示されます"}</p>
-                    {cameraStatus !== "starting" ? <button type="button" onClick={() => void startCamera()}>カメラを起動</button> : null}
-                  </div>
-                )}
-                {headTailDetection.observation && videoRef.current && videoRef.current.videoWidth > 0 ? (
-                  <DetectionOverlay
-                    observation={headTailDetection.observation}
-                    width={videoRef.current.videoWidth}
-                    height={videoRef.current.videoHeight}
-                  />
-                ) : null}
-              </section>
+              <div className="guide-stage">
+                <section className="camera-card" aria-label="カメラプレビュー">
+                  <div className="camera-topline"><span>カメラプレビュー</span><span>映像は送信されません</span></div>
+                  {cameraStream ? (
+                    <video ref={videoRef} autoPlay muted playsInline aria-label="カメラ映像" />
+                  ) : (
+                    <div className="camera-placeholder">
+                      <CameraPlaceholderIcon />
+                      <p>{cameraStatus === "starting" ? "カメラを起動しています…" : cameraMessage || "カメラ映像はここに表示されます"}</p>
+                      {cameraStatus !== "starting" ? <button type="button" onClick={() => void startCamera()}>カメラを起動</button> : null}
+                    </div>
+                  )}
+                  {headTailDetection.observation && videoRef.current && videoRef.current.videoWidth > 0 ? (
+                    <DetectionOverlay
+                      observation={headTailDetection.observation}
+                      width={videoRef.current.videoWidth}
+                      height={videoRef.current.videoHeight}
+                    />
+                  ) : null}
+                </section>
+
+                <aside className="guide-fish-stage" aria-label={`${chosenFish}先生`}>
+                  <div className="guide-fish-bubble">一緒に確認しよう！</div>
+                  {selectedFishVisualData ? (
+                    <img
+                      className={fishImageClass("guide-fish-image")}
+                      src={fishImage(selectedFishVisualData)}
+                      alt={`${selectedFishVisualData.name}先生`}
+                    />
+                  ) : null}
+                </aside>
+              </div>
 
               <aside className="guide-panel">
-                <div className="guide-panel-heading"><div><span>全魚共通の手動ガイド</span><h1>さばき手順</h1></div><strong>{String(activeStep + 1).padStart(2, "0")} <i>/</i> {String(guide.steps.length).padStart(2, "0")}</strong></div>
-                <div className="guide-progress" aria-label={`${activeStep + 1} / ${guide.steps.length}`}>
-                  {guide.steps.map((step, index) => <span key={step.id} className={index <= activeStep ? "is-active" : ""} />)}
-                </div>
                 {currentStep ? (
                   <div className="guide-step" aria-live="polite">
                     <h2>{currentStep.title}</h2>
                     <p>{currentStep.description}</p>
+                    {guideMessage ? <p className="guide-message" role="status">{guideMessage}</p> : null}
                   </div>
                 ) : null}
-                {guideMessage ? <p className="guide-message" role="status">{guideMessage}</p> : null}
-                <div className="observation-note" data-state={headTailDetection.status} role="status" aria-live="polite">
+                <div className="observation-note" data-state={headTailDetection.status} aria-live="off">
                   <span>{headTailDetection.status === "active" ? "AI" : "INFO"}</span>
-                  <p><strong>{detectionTitle}</strong><small>{detectionResult} 工程は自動で進みません。</small></p>
+                  <p>
+                    <strong>{detectionTitle}</strong>
+                    <small>{detectionResult} 工程は自動で進みません。</small>
+                    <small className="model-scope-note">公開魚画像で学習した試験モデルです。調理台の魚では未検証です。</small>
+                  </p>
                 </div>
-                <div className="guide-controls">
-                  <button type="button" onClick={() => setActiveStep((step) => Math.max(0, step - 1))} disabled={activeStep === 0}>戻る</button>
-                  <button type="button" onClick={() => void advanceStep()} disabled={guideSessionLoading || guideAdvancing || (activeStep >= guide.steps.length - 1 && (!guideSession || guideSession.status === "completed"))}>{guideSessionLoading ? "準備中…" : guideAdvancing ? "更新中…" : guideSession?.status === "completed" ? "完了" : activeStep >= guide.steps.length - 1 ? "ガイドを完了" : "次の工程へ"} <span>→</span></button>
+                <div className="guide-actions">
+                  <div className="guide-controls">
+                    <button type="button" onClick={() => setActiveStep((step) => Math.max(0, step - 1))} disabled={activeStep === 0}>戻る</button>
+                    <button type="button" onClick={() => void advanceStep()} disabled={guideSessionLoading || guideAdvancing || (activeStep >= guide.steps.length - 1 && (!guideSession || guideSession.status === "completed"))}>{guideSessionLoading ? "準備中…" : guideAdvancing ? "更新中…" : guideSession?.status === "completed" ? "完了" : activeStep >= guide.steps.length - 1 ? "ガイドを完了" : "次の工程へ"} <span>→</span></button>
+                  </div>
                 </div>
               </aside>
             </div>
-            {cameraMessage ? <p className="camera-message" role="status">{cameraMessage}</p> : null}
           </div>
         </section>
       )}
@@ -531,12 +891,12 @@ function App() {
   );
 }
 
-function DetectionOverlay({ observation, width, height }: { observation: Observation; width: number; height: number }) {
+function DetectionOverlay({ observation, width, height, fit = "cover" }: { observation: Observation; width: number; height: number; fit?: "cover" | "contain" }) {
   return (
     <svg
       className="detection-overlay"
       viewBox={`0 0 ${width} ${height}`}
-      preserveAspectRatio="xMidYMid slice"
+      preserveAspectRatio={fit === "contain" ? "xMidYMid meet" : "xMidYMid slice"}
       role="img"
       aria-label="MediaPipeが検出した魚の頭と尾の位置"
     >
