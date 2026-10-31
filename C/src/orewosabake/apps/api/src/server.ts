@@ -231,7 +231,11 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
     const contextRequest = GuideContextRequestSchema.safeParse(body);
     const guideRequest = GuideRequestSchema.safeParse(body);
     if (!contextRequest.success && !guideRequest.success) {
-      sendError(response, 422, "VALIDATION_ERROR", "入力内容に誤りがあります。", validationDetails(contextRequest.error.issues));
+      const looksLikeContextRequest = typeof body === "object"
+        && body !== null
+        && ["fishName", "fishCategory", "fishState"].some((field) => field in body);
+      const issues = looksLikeContextRequest ? contextRequest.error.issues : guideRequest.error.issues;
+      sendError(response, 422, "VALIDATION_ERROR", "入力内容に誤りがあります。", validationDetails(issues));
       return;
     }
 
