@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   AdvanceGuideStepRequestSchema,
   CATALOG,
+  GuideContextRequestSchema,
   GuideRequestSchema,
   GuideSessionSchema,
   MOCK_GUIDE,
@@ -106,6 +107,12 @@ function validationDetails(issues: Array<{ code: string; path: PropertyKey[] }>)
         ? "魚種はカタログにある候補から選んでください。"
         : field === "preparationId"
           ? "目的は「皮を取り除き、身だけを取り出す」を指定してください。"
+          : field === "fishName"
+            ? "魚の名前を入力してください。"
+            : field === "fishCategory"
+              ? "魚のカテゴリを指定してください。"
+              : field === "fishState"
+                ? "魚の状態を指定してください。"
           : field === "stepId"
             ? "現在の工程IDを指定してください。"
             : field === "source"
@@ -221,9 +228,10 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
       return;
     }
 
-    const parsed = GuideRequestSchema.safeParse(body);
-    if (!parsed.success) {
-      sendError(response, 422, "VALIDATION_ERROR", "入力内容に誤りがあります。", validationDetails(parsed.error.issues));
+    const contextRequest = GuideContextRequestSchema.safeParse(body);
+    const guideRequest = GuideRequestSchema.safeParse(body);
+    if (!contextRequest.success && !guideRequest.success) {
+      sendError(response, 422, "VALIDATION_ERROR", "入力内容に誤りがあります。", validationDetails(contextRequest.error.issues));
       return;
     }
 
