@@ -49,11 +49,11 @@ python ml/analyze_hog_predictions.py
 
 Model and analysis artifacts are written under ignored `ml/generated/head-tail-hog/`. The model is a small `.npz` linear classifier; the MediaPipe adapter does not load it.
 
-An attempt to install CPU PyTorch for YOLO training ran out of disk space. The computer had about 138 MB free at the time, and no supported Python 3.10 environment for the older Model Maker route. `nvidia-smi` was not available, so GPU availability was not verified; this experiment used CPU. No deep detector or TFLite model was produced. The HOG baseline is a useful low-cost experiment while that environment is unavailable, but it does not replace the full-frame detector described below.
+An earlier attempt to install CPU PyTorch for YOLO training ran out of disk space. The MediaPipe Model Maker experiment below instead uses an isolated Python 3.10 environment in WSL, stored under the Linux home directory; training and converted data remain in ignored project output. `nvidia-smi` was unavailable, so this run uses CPU. The HOG baseline remains a separate crop-classification baseline and does not replace the full-frame detector.
 
 ## Prepare or train
 
-The current desktop has Python 3.12 and 3.14, while the last published Model Maker package lists Python 3.8–3.10. The data-conversion-only mode works with the bundled Python and Pillow:
+The last published Model Maker package lists Python 3.8–3.10; the current Windows Python is newer. Data conversion alone works with a Python environment that has Pillow:
 
 ```powershell
 python ml/train_detector.py --prepare-only --force
@@ -61,21 +61,19 @@ python ml/train_detector.py --prepare-only --force
 
 It creates the converted COCO images/labels under ignored `ml/generated/coco/`, plus `split-manifest.json` and `prepare-summary.json`. `--force` only replaces that generated COCO conversion.
 
-For the training experiment, use a Python 3.10 environment:
+For training, use Ubuntu on WSL. From the project directory in WSL, prepare the isolated Python 3.10 environment and pinned dependencies:
 
-```powershell
-py -3.10 -m venv ml/.venv
-ml/.venv/Scripts/python.exe -m pip install -r ml/requirements-model-maker.txt
-ml/.venv/Scripts/python.exe ml/train_detector.py --force
+```bash
+bash ml/setup-wsl-training.sh
 ```
 
-The model and metrics are written to ignored `ml/generated/output/`. Model Maker uses transfer learning and COCO evaluation metrics; the script reports validation and group-held-out test metrics separately. No QAT or aggressive quantization is included in this first run, so the float32 exported artifact can be checked for compatibility first.
+The script prints the exact command to train. The pinned dependencies resolve the Python/Windows TensorFlow Text conflict and MediaPipe metadata package incompatibilities seen with newer releases. Training takes place on CPU. Model Maker uses transfer learning and COCO evaluation metrics; validation and capture-day-held-out test metrics are reported separately. The exported float32 TFLite file is also loaded and run through MediaPipe Tasks before it is copied to the web public model path. Generated datasets, checkpoints, metrics, and the model file are ignored by Git.
 
 ## Browser model adapter
 
-After training and compatibility review, copy `ml/generated/output/head-tail.tflite` to `apps/web/public/models/head-tail.tflite`. The browser adapter loads that file as a MediaPipe Tasks Vision Object Detector and accepts decoded video frames. The UI remains in mock mode until a model and camera lifecycle are intentionally connected.
+The web client checks for `apps/web/public/models/head-tail.tflite` when the camera starts and loads it through MediaPipe Tasks Vision `ObjectDetector` in `VIDEO` mode. It samples the local camera about once per second, draws head/tail boxes, and disposes the detector when the camera/guide is stopped or the page is hidden. Only the model and MediaPipe WASM runtime are fetched; video frames are not sent to the API. The guide's manual session remains independent of detections, and a missing head/tail detection is not treated as evidence that a part was removed.
 
-MediaPipe's web `detectForVideo()` call is synchronous and can block the main thread. The product design samples frames around once or twice per second, allows one inference at a time, and should move inference to a worker only if measurements show the main thread is blocked. The adapter does not request camera permission, upload frames, or control guide progression.
+MediaPipe's web `detectForVideo()` call is synchronous and can block the main thread. The current implementation samples at 1 Hz and allows one inference at a time as an initial low-load check. A dedicated worker should be evaluated with frame-time measurements before increasing that rate.
 
 ## What the experiment cannot answer
 

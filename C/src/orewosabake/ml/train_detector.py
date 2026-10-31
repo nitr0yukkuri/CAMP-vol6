@@ -118,7 +118,7 @@ def prepare_dataset(source_root: Path, generated_root: Path, force: bool) -> dic
 
     for split_name in ("train", "validation", "test"):
         split_root = output_root / split_name
-        (split_root / "data").mkdir(parents=True, exist_ok=True)
+        (split_root / "images").mkdir(parents=True, exist_ok=True)
         accumulators[split_name] = {
             "images": [],
             "annotations": [],
@@ -136,7 +136,7 @@ def prepare_dataset(source_root: Path, generated_root: Path, force: bool) -> dic
             image_width, image_height = image.size
 
         target_name = f"{source_split.lower()}_{image_path.name}"
-        target_image = output_root / target_split / "data" / target_name
+        target_image = output_root / target_split / "images" / target_name
         shutil.copy2(image_path, target_image)
 
         bucket = accumulators[target_split]
@@ -247,17 +247,61 @@ def train_model(generated_root: Path, output_root: Path) -> dict[str, Any]:
     test_loss, test_metrics = model.evaluate(test_data, batch_size=4)
     model.export_model(model_name="head-tail.tflite")
 
+    model_path = output_root / "head-tail.tflite"
+    sample_images = sorted((dataset_root / "test" / "images").glob("*.jpg"))
+    if not sample_images:
+        raise FileNotFoundError("No held-out image is available for the MediaPipe compatibility check")
+    compatibility = verify_exported_model(model_path, sample_images[0])
+
+    web_model_path = PROJECT_ROOT / "apps" / "web" / "public" / "models" / "head-tail.tflite"
+    web_model_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(model_path, web_model_path)
+
     report = {
         "model": "MediaPipe Model Maker / MobileNetV2 I320",
         "validation_loss": float(validation_loss),
         "validation_metrics": {key: float(value) for key, value in validation_metrics.items()},
         "test_loss": float(test_loss),
         "test_metrics": {key: float(value) for key, value in test_metrics.items()},
-        "model_path": str(output_root / "head-tail.tflite"),
+        "model_path": str(model_path),
+        "web_model_path": str(web_model_path),
+        "compatibility_smoke_test": compatibility,
         "warning": "Small, public benchmark only. Not a fish-preparation state classifier.",
     }
     (output_root / "metrics.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
+
+
+def verify_exported_model(model_path: Path, sample_image: Path) -> dict[str, Any]:
+    """Load and run the exported artifact through the MediaPipe Tasks API."""
+    import mediapipe as mp
+    import numpy as np
+    from mediapipe.tasks import python as mp_python
+    from mediapipe.tasks.python import vision
+
+    if not model_path.is_file() or model_path.stat().st_size == 0:
+        raise FileNotFoundError(f"MediaPipe did not export a usable model: {model_path}")
+
+    image_array = np.array(Image.open(sample_image).convert("RGB"), copy=True)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_array)
+    options = vision.ObjectDetectorOptions(
+        base_options=mp_python.BaseOptions(model_asset_path=str(model_path)),
+        running_mode=vision.RunningMode.IMAGE,
+        max_results=12,
+        category_allowlist=["head", "tail"],
+    )
+    detector = vision.ObjectDetector.create_from_options(options)
+    try:
+        result = detector.detect(mp_image)
+    finally:
+        detector.close()
+
+    return {
+        "runtime": "MediaPipe Tasks Vision ObjectDetector",
+        "loadedAndRan": True,
+        "sampleImage": sample_image.name,
+        "detections": len(result.detections),
+    }
 
 
 def main() -> None:
