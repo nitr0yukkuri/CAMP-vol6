@@ -1,3 +1,4 @@
+import { DurableObject } from "cloudflare:workers";
 import {
   AdvanceGuideStepRequestSchema,
   CATALOG,
@@ -14,7 +15,10 @@ import {
 const maxBodyBytes = 16 * 1024;
 const maxGuideSessions = 500;
 const guideSessionTtlMs = 30 * 60 * 1000;
-const guideSessions = new Map<string, GuideSession>();
+
+interface Env {
+  GUIDE_SESSIONS: DurableObjectNamespace<GuideSessionStore>;
+}
 
 class RequestError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -23,63 +27,16 @@ class RequestError extends Error {
 }
 
 export default {
-  async fetch(request: Request): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     try {
     const { pathname } = new URL(request.url);
-    pruneExpiredGuideSessions();
 
     const sessionMatch = pathname.match(/^\/api\/guide\/sessions\/([0-9a-f-]{36})$/i);
     const advanceMatch = pathname.match(/^\/api\/guide\/sessions\/([0-9a-f-]{36})\/advance$/i);
 
-    if (pathname === "/api/guide/sessions" && request.method === "POST") {
-      const body = await readRequestBody(request);
-      const parsed = GuideRequestSchema.safeParse(body);
-      if (!parsed.success) return validationError();
-      if (guideSessions.size >= maxGuideSessions) {
-        return errorResponse(503, "SESSION_CAPACITY_REACHED", "保持中のガイドセッション数が上限に達しています。時間をおいて再試行してください。");
-      }
-      const session = createMockSession(parsed.data.fishId, parsed.data.preparationId);
-      guideSessions.set(session.sessionId, session);
-      return json(session, 201);
-    }
-
-    if (sessionMatch && request.method === "GET") {
-      const session = guideSessions.get(sessionMatch[1]!);
-      return session
-        ? json(session)
-        : errorResponse(404, "SESSION_NOT_FOUND", "ガイドセッションが見つかりません。");
-    }
-
-    if (advanceMatch && request.method === "POST") {
-      const sessionId = advanceMatch[1]!;
-      const session = guideSessions.get(sessionId);
-      if (!session) return errorResponse(404, "SESSION_NOT_FOUND", "ガイドセッションが見つかりません。");
-
-      const body = await readRequestBody(request);
-      const parsed = AdvanceGuideStepRequestSchema.safeParse(body);
-      if (!parsed.success) return validationError();
-      if (parsed.data.source === "voice" && parsed.data.transcript?.trim() !== "次へ") {
-        return errorResponse(422, "VOICE_COMMAND_NOT_RECOGNIZED", "音声入力で「次へ」と確認できませんでした。工程は進めていません。", { session });
-      }
-      if (session.status === "completed") {
-        return errorResponse(409, "SESSION_COMPLETED", "このガイドはすでに完了しています。", { session });
-      }
-      if (parsed.data.stepId !== session.currentStep?.id) {
-        return errorResponse(409, "STEP_CONFLICT", "工程が更新されています。現在の工程を確認してください。", { session });
-      }
-
-      const completedStepIds = [...session.completedStepIds, parsed.data.stepId];
-      const nextStepIndex = session.currentStepIndex + 1;
-      const nextSession = GuideSessionSchema.parse({
-        ...session,
-        currentStep: MOCK_GUIDE.steps[nextStepIndex] ?? null,
-        currentStepIndex: nextStepIndex,
-        completedStepIds,
-        status: nextStepIndex >= MOCK_GUIDE.steps.length ? "completed" : "active",
-        updatedAt: new Date().toISOString(),
-      });
-      guideSessions.set(sessionId, nextSession);
-      return json(nextSession);
+    if (pathname === "/api/guide/sessions" || sessionMatch || advanceMatch) {
+      const durableRequest = new Request(new URL(pathname, "https://guide-session.internal"), request);
+      return env.GUIDE_SESSIONS.getByName("guide-sessions").fetch(durableRequest);
     }
 
     if (pathname === "/api/guide" && request.method === "POST") {
@@ -138,7 +95,135 @@ export default {
       throw error;
     }
   },
-} satisfies ExportedHandler;
+} satisfies ExportedHandler<Env>;
+
+export class GuideSessionStore extends DurableObject<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS guide_sessions (
+        session_id TEXT PRIMARY KEY,
+        session_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    try {
+      const { pathname } = new URL(request.url);
+      const sessionMatch = pathname.match(/^\/api\/guide\/sessions\/([0-9a-f-]{36})$/i);
+      const advanceMatch = pathname.match(/^\/api\/guide\/sessions\/([0-9a-f-]{36})\/advance$/i);
+
+      if (pathname === "/api/guide/sessions" && request.method === "POST") {
+        const body = await readRequestBody(request);
+        const parsed = GuideRequestSchema.safeParse(body);
+        if (!parsed.success) return validationError();
+
+        const expiryCutoff = new Date(Date.now() - guideSessionTtlMs).toISOString();
+        this.ctx.storage.sql.exec("DELETE FROM guide_sessions WHERE updated_at <= ?", expiryCutoff);
+        const count = this.ctx.storage.sql.exec<{ count: number }>(
+          "SELECT COUNT(*) AS count FROM guide_sessions",
+        ).one().count;
+        if (count >= maxGuideSessions) {
+          return errorResponse(503, "SESSION_CAPACITY_REACHED", "保持中のガイドセッション数が上限に達しています。時間をおいて再試行してください。");
+        }
+
+        const session = createMockSession(parsed.data.fishId, parsed.data.preparationId);
+        this.storeSession(session);
+        return json(session, 201);
+      }
+
+      if (sessionMatch && request.method === "GET") {
+        const session = this.getActiveSession(sessionMatch[1]!);
+        return session
+          ? json(session)
+          : errorResponse(404, "SESSION_NOT_FOUND", "ガイドセッションが見つかりません。");
+      }
+
+      if (advanceMatch && request.method === "POST") {
+        const sessionId = advanceMatch[1]!;
+        if (!this.getActiveSession(sessionId)) {
+          return errorResponse(404, "SESSION_NOT_FOUND", "ガイドセッションが見つかりません。");
+        }
+
+        const body = await readRequestBody(request);
+        const parsed = AdvanceGuideStepRequestSchema.safeParse(body);
+        if (!parsed.success) return validationError();
+
+        // Re-read after consuming the body so simultaneous advances cannot
+        // both commit against the same stale step.
+        const session = this.getActiveSession(sessionId);
+        if (!session) return errorResponse(404, "SESSION_NOT_FOUND", "ガイドセッションが見つかりません。");
+        if (parsed.data.source === "voice" && parsed.data.transcript?.trim() !== "次へ") {
+          return errorResponse(422, "VOICE_COMMAND_NOT_RECOGNIZED", "音声入力で「次へ」と確認できませんでした。工程は進めていません。", { session });
+        }
+        if (session.status === "completed") {
+          return errorResponse(409, "SESSION_COMPLETED", "このガイドはすでに完了しています。", { session });
+        }
+        if (parsed.data.stepId !== session.currentStep?.id) {
+          return errorResponse(409, "STEP_CONFLICT", "工程が更新されています。現在の工程を確認してください。", { session });
+        }
+
+        const completedStepIds = [...session.completedStepIds, parsed.data.stepId];
+        const nextStepIndex = session.currentStepIndex + 1;
+        const nextSession = GuideSessionSchema.parse({
+          ...session,
+          currentStep: MOCK_GUIDE.steps[nextStepIndex] ?? null,
+          currentStepIndex: nextStepIndex,
+          completedStepIds,
+          status: nextStepIndex >= MOCK_GUIDE.steps.length ? "completed" : "active",
+          updatedAt: new Date().toISOString(),
+        });
+        this.storeSession(nextSession);
+        return json(nextSession);
+      }
+
+      const knownPath = pathname === "/api/guide/sessions" || sessionMatch !== null || advanceMatch !== null;
+      if (!knownPath) return errorResponse(404, "NOT_FOUND", "指定されたAPIは見つかりません。");
+      const allow = pathname === "/api/guide/sessions" || advanceMatch ? "POST" : "GET";
+      return new Response(JSON.stringify({ error: { code: "METHOD_NOT_ALLOWED", message: "このHTTPメソッドには対応していません。" } }), {
+        status: 405,
+        headers: { "Allow": allow, "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+      });
+    } catch (error) {
+      if (error instanceof RequestError) return errorResponse(error.status, error.code, error.message);
+      throw error;
+    }
+  }
+
+  private getActiveSession(sessionId: string): GuideSession | null {
+    const row = this.ctx.storage.sql.exec<{ session_json: string }>(
+      "SELECT session_json FROM guide_sessions WHERE session_id = ?",
+      sessionId,
+    ).toArray()[0];
+    if (!row) return null;
+
+    const session = GuideSessionSchema.parse(JSON.parse(row.session_json) as unknown);
+    if (Date.now() - Date.parse(session.updatedAt) >= guideSessionTtlMs) {
+      this.deleteSession(sessionId);
+      return null;
+    }
+    return session;
+  }
+
+  private storeSession(session: GuideSession): void {
+    this.ctx.storage.sql.exec(
+      `INSERT INTO guide_sessions (session_id, session_json, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(session_id) DO UPDATE SET
+         session_json = excluded.session_json,
+         updated_at = excluded.updated_at`,
+      session.sessionId,
+      JSON.stringify(session),
+      session.updatedAt,
+    );
+  }
+
+  private deleteSession(sessionId: string): void {
+    this.ctx.storage.sql.exec("DELETE FROM guide_sessions WHERE session_id = ?", sessionId);
+  }
+}
 
 function createMockSession(fishId: GuideSession["fishId"], preparationId: GuideSession["preparationId"]): GuideSession {
   const now = new Date().toISOString();
@@ -155,12 +240,6 @@ function createMockSession(fishId: GuideSession["fishId"], preparationId: GuideS
     createdAt: now,
     updatedAt: now,
   });
-}
-
-function pruneExpiredGuideSessions(now = Date.now()) {
-  for (const [sessionId, session] of guideSessions) {
-    if (now - Date.parse(session.updatedAt) >= guideSessionTtlMs) guideSessions.delete(sessionId);
-  }
 }
 
 async function readRequestBody(request: Request): Promise<unknown> {
