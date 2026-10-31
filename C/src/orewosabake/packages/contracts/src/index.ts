@@ -8,6 +8,14 @@ export const FishStateSchema = z.enum([
   "unknown",
 ]);
 
+export const FishCategorySchema = z.enum(["saltwater", "freshwater", "crustacean", "unknown"]);
+
+export const GuideContextRequestSchema = z.object({
+  fishName: z.string().trim().min(1).max(80),
+  fishCategory: FishCategorySchema,
+  fishState: FishStateSchema,
+}).strict();
+
 export const GuideStepSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -87,6 +95,8 @@ export const ObservationSchema = z.object({
 });
 
 export type FishState = z.infer<typeof FishStateSchema>;
+export type FishCategory = z.infer<typeof FishCategorySchema>;
+export type GuideContextRequest = z.infer<typeof GuideContextRequestSchema>;
 export type GuideStep = z.infer<typeof GuideStepSchema>;
 export type Guide = z.infer<typeof GuideSchema>;
 export type GuideRequest = z.infer<typeof GuideRequestSchema>;
