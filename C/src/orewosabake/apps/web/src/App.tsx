@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { AdvanceGuideStepRequestSchema, GuideContextRequestSchema, GuideRequestSchema, GuideSessionSchema, MOCK_GUIDE, type FishCategory, type Guide, type GuideContextRequest, type GuideRequest, type GuideSession, type Observation } from "@orewosabake/contracts";
+import { AdvanceGuideStepRequestSchema, getReferenceGuide, GuideRequestSchema, GuideSessionSchema, resolveGuideFishId, type GuideRequest, type GuideSession, type Observation } from "@orewosabake/contracts";
 import { useHeadTailDetection, type HeadTailDetectionStatus } from "./hooks/useHeadTailDetection";
 
 type Category = "よく使う" | "海水魚" | "淡水魚" | "甲殻類";
 type Screen = "select" | "guide" | "capture";
+type GuideSessionMode = "worker" | "local";
 type CameraStatus = "idle" | "starting" | "active" | "denied" | "unavailable" | "error";
 type CaptureStage = "whole" | "head_removed" | "gutted" | "filleting" | "finished" | "other" | "unknown";
 type PartVisibility = "present_visible" | "removed_confirmed" | "occluded" | "out_of_frame" | "unknown";
@@ -140,26 +141,69 @@ function fishImageClass(baseClass: string): string {
   return `${baseClass} is-mascot`;
 }
 
-async function sendFishContext(requestBody: GuideContextRequest, signal: AbortSignal): Promise<void> {
-  const response = await fetch("/api/guide", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(GuideContextRequestSchema.parse(requestBody)),
-    signal,
-  });
-  // Valid requests currently return 503 until guide generation is configured.
-  if (!response.ok && response.status !== 503) throw new Error("Guide API is unavailable");
+async function createGuideSession(requestBody: GuideRequest, signal: AbortSignal): Promise<GuideSession> {
+  let response: Response;
+  try {
+    response = await fetch("/api/guide/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(GuideRequestSchema.parse(requestBody)),
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof TypeError) throw new GuideApiUnavailableError();
+    throw error;
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!response.ok) {
+    const payload = contentType.includes("application/json")
+      ? await response.clone().json().catch(() => null) as { error?: { code?: string } } | null
+      : null;
+    const apiRouteMissing = response.status === 404 || response.status === 405;
+    if (apiRouteMissing && (!payload?.error?.code || ["NOT_FOUND", "METHOD_NOT_ALLOWED"].includes(payload.error.code))) {
+      throw new GuideApiUnavailableError();
+    }
+    throw new Error("Guide session API rejected the request");
+  }
+  if (!contentType.includes("application/json")) throw new GuideApiUnavailableError();
+  return GuideSessionSchema.parse(await response.json());
 }
 
-async function createGuideSession(requestBody: GuideRequest, signal: AbortSignal): Promise<GuideSession> {
-  const response = await fetch("/api/guide/sessions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(GuideRequestSchema.parse(requestBody)),
-    signal,
+class GuideApiUnavailableError extends Error {}
+
+function createLocalGuideSession(requestBody: GuideRequest): GuideSession {
+  const guide = getReferenceGuide(requestBody.fishId);
+  if (!guide) throw new Error("No reference guide is registered for this fish");
+  const now = new Date().toISOString();
+  return GuideSessionSchema.parse({
+    sessionId: crypto.randomUUID(),
+    fishId: requestBody.fishId,
+    preparationId: requestBody.preparationId,
+    guide,
+    currentStep: guide.steps[0],
+    currentStepIndex: 0,
+    completedStepIds: [],
+    status: "active",
+    source: "public_reference",
+    createdAt: now,
+    updatedAt: now,
   });
-  if (!response.ok) throw new Error("Guide session API is unavailable");
-  return GuideSessionSchema.parse(await response.json());
+}
+
+function advanceLocalGuideSession(session: GuideSession): GuideSession {
+  const nextStepIndex = session.currentStepIndex + 1;
+  const completedStepIds = session.currentStep
+    ? [...session.completedStepIds, session.currentStep.id]
+    : session.completedStepIds;
+  return GuideSessionSchema.parse({
+    ...session,
+    currentStep: session.guide.steps[nextStepIndex] ?? null,
+    currentStepIndex: nextStepIndex,
+    completedStepIds,
+    status: nextStepIndex >= session.guide.steps.length ? "completed" : "active",
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 async function advanceGuideSession(session: GuideSession, signal: AbortSignal): Promise<GuideSession> {
@@ -174,20 +218,6 @@ async function advanceGuideSession(session: GuideSession, signal: AbortSignal): 
   });
   if (!response.ok) throw new Error("Guide session could not advance");
   return GuideSessionSchema.parse(await response.json());
-}
-
-function guideFishId(name: string): GuideRequest["fishId"] | null {
-  if (name === "アジ") return "aji";
-  if (name === "サバ") return "saba";
-  if (name === "タイ") return "tai";
-  return null;
-}
-
-function toApiFishCategory(category: Fish["category"] | undefined): FishCategory {
-  if (category === "海水魚") return "saltwater";
-  if (category === "淡水魚") return "freshwater";
-  if (category === "甲殻類") return "crustacean";
-  return "unknown";
 }
 
 function FishMark() {
@@ -245,9 +275,8 @@ function App() {
   const [category, setCategory] = useState<Category>("よく使う");
   const [search, setSearch] = useState("");
   const [selectedFish, setSelectedFish] = useState("ハマチ");
-  const [guide, setGuide] = useState<Guide>(MOCK_GUIDE);
   const [guideSession, setGuideSession] = useState<GuideSession | null>(null);
-  const [localGuideCompleted, setLocalGuideCompleted] = useState(false);
+  const [guideSessionMode, setGuideSessionMode] = useState<GuideSessionMode>("worker");
   const [guideSessionLoading, setGuideSessionLoading] = useState(false);
   const [guideMessage, setGuideMessage] = useState("");
   const [guideAdvancing, setGuideAdvancing] = useState(false);
@@ -369,17 +398,18 @@ function App() {
   const chosenFish = selectedFish === "その他" ? search.trim() || "ほかの魚" : selectedFish;
   const selectedFishData = fishList.find((fish) => fish.name === selectedFish);
   const selectedFishVisualData = selectedFishData ?? (selectedFish === "その他" ? fishList.find((fish) => fish.name === "マグロ") : undefined);
-  const isLastGuideStep = activeStep >= guide.steps.length - 1;
-  const guideIsComplete = guideSession?.status === "completed" || (!guideSession && localGuideCompleted);
-  const currentStep = guide.steps[activeStep];
+  const selectedGuideFishId = resolveGuideFishId(chosenFish);
+  const guide = guideSession?.guide;
+  const isLastGuideStep = guide ? activeStep >= guide.steps.length - 1 : false;
+  const guideIsComplete = guideSession?.status === "completed";
+  const currentStep = guide ? guide.steps[activeStep] : undefined;
   const fishCanContinue = selectedFish !== "その他" || search.trim().length > 0;
 
   function startGuide() {
     setScreen("guide");
     setActiveStep(0);
-    setGuide(MOCK_GUIDE);
     setGuideSession(null);
-    setLocalGuideCompleted(false);
+    setGuideSessionMode("worker");
     setGuideSessionLoading(false);
     setGuideMessage("");
     setCameraMessage("");
@@ -387,32 +417,33 @@ function App() {
     guideRequestController.current?.abort();
     const guideController = new AbortController();
     guideRequestController.current = guideController;
-    const fishContext = {
-      fishName: chosenFish,
-      fishCategory: toApiFishCategory(selectedFishData?.category),
-      fishState: "unknown" as const,
-    };
-    void sendFishContext(fishContext, guideController.signal).catch(() => {
-      // Keep the common manual guide usable when the context endpoint is unavailable.
-    });
-    const selectedFishId = guideFishId(selectedFish);
+    const selectedFishId = selectedGuideFishId;
     if (selectedFishId) {
       setGuideSessionLoading(true);
-      const guideRequest = GuideRequestSchema.parse({ fishId: selectedFishId, preparationId: "edible_portion" });
+      const guideRequest = GuideRequestSchema.parse({ fishId: selectedFishId, preparationId: "three_piece_fillet" });
       void createGuideSession(guideRequest, guideController.signal).then((session) => {
         if (guideController.signal.aborted) return;
         setGuideSession(session);
-        setGuide(session.guide);
         setActiveStep(session.currentStepIndex);
-      }).catch(() => {
-        if (!guideController.signal.aborted) {
-          setGuideMessage("共通の表示モックです。");
+      }).catch((error: unknown) => {
+        if (!guideController.signal.aborted && error instanceof GuideApiUnavailableError) {
+          try {
+            const localSession = createLocalGuideSession(guideRequest);
+            setGuideSession(localSession);
+            setGuideSessionMode("local");
+            setActiveStep(localSession.currentStepIndex);
+            setGuideMessage("APIがないため、この画面を開いている間だけ端末内で進行します。工程をAIが判定する機能はありません。");
+          } catch {
+            setGuideMessage("魚種別の参考手順を準備できませんでした。魚を選び直してください。");
+          }
+        } else if (!guideController.signal.aborted) {
+          setGuideMessage("参考手順を読み込めませんでした。通信状態を確認して、魚を選び直してください。");
         }
       }).finally(() => {
         if (!guideController.signal.aborted) setGuideSessionLoading(false);
       });
     } else {
-      setGuideMessage(`${chosenFish}専用ガイドは未登録です。`);
+      setGuideMessage(`${chosenFish}の参考手順は未登録です。共通の仮手順には置き換えません。`);
     }
 
     void startCamera();
@@ -710,6 +741,7 @@ function App() {
   }
 
   async function advanceStep() {
+    if (!guideSession || !guide) return;
     const nextIndex = Math.min(guide.steps.length - 1, activeStep + 1);
     if (guideAdvanceInFlight.current) return;
 
@@ -724,19 +756,16 @@ function App() {
     // The session API is authoritative. A locally selected earlier step can be
     // revisited; moving back to the server's current step stays local, and only
     // the next server step is submitted once the UI catches up.
-    if (!guideSession) {
-      if (nextIndex !== activeStep) {
-        setActiveStep(nextIndex);
-        setGuideMessage("");
-      } else if (!localGuideCompleted) {
-        setLocalGuideCompleted(true);
-        setGuideMessage("このガイドを完了しました。");
-      }
+    if (activeStep < guideSession.currentStepIndex || activeStep > guideSession.currentStepIndex) {
+      if (nextIndex !== activeStep) setActiveStep(nextIndex);
       return;
     }
 
-    if (activeStep < guideSession.currentStepIndex || activeStep > guideSession.currentStepIndex) {
-      if (nextIndex !== activeStep) setActiveStep(nextIndex);
+    if (guideSessionMode === "local") {
+      const session = advanceLocalGuideSession(guideSession);
+      setGuideSession(session);
+      setActiveStep(Math.min(session.currentStepIndex, session.guide.steps.length - 1));
+      setGuideMessage(session.status === "completed" ? "このガイドを完了しました。" : "");
       return;
     }
 
@@ -757,7 +786,6 @@ function App() {
       const session = await advanceGuideSession(guideSession, signal);
       if (signal.aborted) return;
       setGuideSession(session);
-      setGuide(session.guide);
       setActiveStep(Math.min(session.currentStepIndex, session.guide.steps.length - 1));
       setGuideMessage(session.status === "completed" ? "このガイドを完了しました。" : "");
     } catch {
@@ -895,7 +923,7 @@ function App() {
 
             <button className="start-button" type="button" disabled={!fishCanContinue} onClick={() => void startGuide()}>
               <strong>俺を捌け！</strong>
-              <span>カメラを起動・手順は全ての魚に共通</span>
+              <span>{selectedGuideFishId ? "魚種別の参考手順で進む" : "この魚の手順は準備中"}</span>
             </button>
             <button className="capture-entry-button" type="button" disabled={!fishCanContinue} onClick={startCapture}>
               研究用データを撮る
@@ -1056,7 +1084,7 @@ function App() {
             <div className="orientation-main">
               <RotatePhoneIcon />
               <h1>画面を横に<br />してください</h1>
-              <p>横画面で、カメラと共通の手順ガイドを並べて表示します。</p>
+              <p>横画面で、カメラと魚種別の参考手順を並べて表示します。</p>
               <span className="orientation-fish">選択中：{chosenFish}</span>
               <p className="orientation-hint">工程の自動判定はありません。画面の手順を確認して進めてください。</p>
             </div>
@@ -1072,12 +1100,14 @@ function App() {
                 <span aria-hidden="true">←</span><span className="back-link-label">魚の選択に戻る</span>
               </button>
               <div className="guide-brand"><strong>{chosenFish}先生のさばきガイド</strong></div>
-              <div className="guide-header-progress" aria-label={`工程 ${activeStep + 1} / ${guide.steps.length}`}>
-                <strong>STEP {activeStep + 1} / {guide.steps.length}</strong>
-                <div className="guide-progress" aria-hidden="true">
-                  {guide.steps.map((step, index) => <span key={step.id} className={index <= activeStep ? "is-active" : ""} />)}
+              {guideSession ? (
+                <div className="guide-header-progress" aria-label={`工程 ${activeStep + 1} / ${guideSession.guide.steps.length}`}>
+                  <strong>STEP {activeStep + 1} / {guideSession.guide.steps.length}</strong>
+                  <div className="guide-progress" aria-hidden="true">
+                    {guideSession.guide.steps.map((step, index) => <span key={step.id} className={index <= activeStep ? "is-active" : ""} />)}
+                  </div>
                 </div>
-              </div>
+              ) : <span className="guide-status-label">{guideSessionLoading ? "手順を準備中…" : guideMessage ? "読み込みエラー" : "手順未登録"}</span>}
               {cameraStatus === "active" ? <button className="camera-stop-inline" type="button" onClick={stopCamera} aria-label="カメラを停止"><CameraStopIcon /></button> : null}
             </header>
 
@@ -1120,9 +1150,20 @@ function App() {
                   <div className="guide-step" aria-live="polite">
                     <h2>{currentStep.title}</h2>
                     <p>{currentStep.description}</p>
+                    {guideSession?.guide.source === "public_reference" ? (
+                      <div className="guide-source">
+                        <span>{guideSessionMode === "local" ? "公開資料の要約・未レビュー · この画面内だけで進行" : guideSession.guide.expertReviewed ? "参考資料" : "公開資料の要約・専門家レビュー前"}</span>
+                        <a href={guideSession.guide.sourceUrl} target="_blank" rel="noreferrer">出典：{guideSession.guide.sourceLabel}</a>
+                      </div>
+                    ) : null}
                     {guideMessage ? <p className="guide-message" role="status">{guideMessage}</p> : null}
                   </div>
-                ) : null}
+                ) : (
+                  <div className="guide-step guide-empty-state" aria-live="polite">
+                    <h2>{guideSessionLoading ? "参考手順を準備中" : "この魚の手順は未登録です"}</h2>
+                    <p>{guideMessage || "公開資料を確認した魚種から順に追加しています。共通の仮手順を魚種別ガイドとして表示することはありません。"}</p>
+                  </div>
+                )}
                 <div className="observation-note guide-observation-note" data-state={headTailDetection.status} aria-live="off">
                   <span aria-hidden="true">AI</span>
                   <div className="guide-observation-copy">
@@ -1144,8 +1185,8 @@ function App() {
                 </div>
                 <div className="guide-actions">
                   <div className="guide-controls">
-                    <button type="button" onClick={() => { setActiveStep((step) => Math.max(0, step - 1)); setGuideMessage(""); }} disabled={activeStep === 0}>戻る</button>
-                    <button type="button" onClick={() => void advanceStep()} disabled={guideSessionLoading || guideAdvancing || (isLastGuideStep && guideIsComplete)}>{guideSessionLoading ? "準備中…" : guideAdvancing ? "更新中…" : isLastGuideStep && guideIsComplete ? "完了" : isLastGuideStep ? "ガイドを完了" : "次の工程へ"} <span>→</span></button>
+                    <button type="button" onClick={() => { setActiveStep((step) => Math.max(0, step - 1)); setGuideMessage(""); }} disabled={!guideSession || activeStep === 0}>戻る</button>
+                    <button type="button" onClick={() => void advanceStep()} disabled={!guideSession || guideSessionLoading || guideAdvancing || (isLastGuideStep && guideIsComplete)}>{guideSessionLoading ? "準備中…" : guideAdvancing ? "更新中…" : isLastGuideStep && guideIsComplete ? "完了" : isLastGuideStep ? "ガイドを完了" : "次の工程へ"} <span>→</span></button>
                   </div>
                 </div>
               </aside>
