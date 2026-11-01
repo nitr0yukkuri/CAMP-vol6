@@ -1208,7 +1208,6 @@ function App() {
                   </div>
                 </div>
               ) : <span className="guide-status-label">{guideSessionLoading ? "手順を準備中…" : guideMessage ? "読み込みエラー" : "手順未登録"}</span>}
-              {cameraStatus === "active" ? <button className="camera-stop-inline" type="button" onClick={stopCamera} aria-label="カメラを停止"><CameraStopIcon /></button> : null}
               <HelpButton onClick={() => setHelpOpen(true)} />
             </header>
 
