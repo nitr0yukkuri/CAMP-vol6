@@ -51,9 +51,11 @@ export default {
       const catalogRequest = GuideRequestSchema.safeParse(body);
       if (!contextRequest.success && !catalogRequest.success) return validationError();
       const fishId = contextRequest.success
-        ? resolveGuideFishId(contextRequest.data.fishName)
+        ? resolveGuideFishId(contextRequest.data.fishName) ?? "other_finfish"
         : catalogRequest.success ? catalogRequest.data.fishId : undefined;
-      const guide = fishId ? getReferenceGuide(fishId) : undefined;
+      const guide = fishId
+        ? getReferenceGuide(fishId, catalogRequest.success ? catalogRequest.data.preparationId : undefined)
+        : undefined;
       return guide
         ? json(guide)
         : errorResponse(404, "GUIDE_NOT_AVAILABLE", "この魚の参考手順はまだ登録されていません。");
@@ -150,7 +152,7 @@ export class GuideSessionStore extends DurableObject<Env> {
         const body = await readRequestBody(request);
         const parsed = GuideRequestSchema.safeParse(body);
         if (!parsed.success) return validationError();
-        const guide = getReferenceGuide(parsed.data.fishId);
+        const guide = getReferenceGuide(parsed.data.fishId, parsed.data.preparationId);
         if (!guide) return errorResponse(404, "GUIDE_NOT_AVAILABLE", "この魚の参考手順はまだ登録されていません。");
 
         const now = Date.now();
