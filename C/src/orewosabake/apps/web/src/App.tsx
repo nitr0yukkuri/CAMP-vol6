@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { AdvanceGuideStepRequestSchema, getReferenceGuide, GuideRequestSchema, GuideSessionSchema, resolveGuideFishId, type GuideRequest, type GuideSession, type Observation } from "@orewosabake/contracts";
 import { useHeadTailDetection, type HeadTailDetectionStatus } from "./hooks/useHeadTailDetection";
+import { fishStageLabel, stageToExpectedFishState } from "./model/fishStage";
 
 type Category = "よく使う" | "海水魚" | "淡水魚" | "甲殻類";
 type Screen = "select" | "guide" | "capture";
@@ -48,6 +49,7 @@ type CaptureRow = {
 };
 
 type PendingCapture = {
+  kind: "head_tail" | "stage";
   blob: Blob;
   previewUrl: string;
   width: number;
@@ -96,7 +98,6 @@ const fishList: Fish[] = [
 const MAX_CAPTURE_FRAMES = 60;
 const MAX_CAPTURE_FRAME_DIMENSION = 832;
 const CAPTURE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const HELP_SEEN_KEY = "orewosabake-help-seen-v1";
 
 function createCaptureSessionId(): string {
   const now = new Date();
@@ -235,6 +236,13 @@ function FishMark() {
   );
 }
 
+function fishTeacherDialogue(step?: { id: string; title: string }) {
+  if (!step) return "いっしょに確認しよう！";
+  if (step.id === "hamachi_scales") return "よーし！うろこ取りだよ！体をぬらして、ヒレの近くもチェック！";
+  if (step.id === "tai_scales") return "よーし！うろこ取りだよ！尾側から取って、ヒレの近くも見てね！";
+  return `いい調子！「${step.title}」に挑戦だよ！`;
+}
+
 function SearchIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -347,13 +355,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
 
 function App() {
   const [screen, setScreen] = useState<Screen>("select");
-  const [helpOpen, setHelpOpen] = useState(() => {
-    try {
-      return window.localStorage.getItem(HELP_SEEN_KEY) !== "true";
-    } catch {
-      return true;
-    }
-  });
+  const [helpOpen, setHelpOpen] = useState(false);
   const [category, setCategory] = useState<Category>("よく使う");
   const [search, setSearch] = useState("");
   const [selectedFish, setSelectedFish] = useState("ハマチ");
@@ -391,9 +393,12 @@ function App() {
   const cameraRequestId = useRef(0);
   const guideRequestController = useRef<AbortController | null>(null);
   const guideAdvanceInFlight = useRef(false);
+  const detectionFishName = selectedFish === "その他" ? search.trim() || "ほかの魚" : selectedFish;
+  const detectionFishId = screen === "guide" ? resolveGuideFishId(detectionFishName) ?? null : null;
   const headTailDetection = useHeadTailDetection(
     videoRef,
     (screen === "guide" || screen === "capture") && cameraStatus === "active" && cameraStream !== null,
+    detectionFishId,
   );
 
   useEffect(() => {
@@ -477,19 +482,23 @@ function App() {
   const genericFishVisualData = fishList.find((fish) => fish.name === "マグロ");
   const selectedFishVisualData = selectedFishData ?? (selectedFish === "その他" ? genericFishVisualData : undefined);
   const selectedGuideFishId = resolveGuideFishId(chosenFish);
+  const stageCaptureSupported = selectedGuideFishId !== undefined;
   const guide = guideSession?.guide;
   const isLastGuideStep = guide ? activeStep >= guide.steps.length - 1 : false;
   const guideIsComplete = guideSession?.status === "completed";
   const currentStep = guide ? guide.steps[activeStep] : undefined;
+  const stageTransition = headTailDetection.fishStage.status === "active"
+    ? headTailDetection.fishStage.transition
+    : null;
+  const transitionedFishState = stageTransition ? stageToExpectedFishState(stageTransition.to) : null;
+  const suggestedStep = guide && currentStep && !isLastGuideStep
+    && transitionedFishState === currentStep.expectedState
+    ? guide.steps[activeStep + 1]
+    : undefined;
   const fishCanContinue = selectedFish !== "その他" || search.trim().length > 0;
 
   function closeHelp() {
     setHelpOpen(false);
-    try {
-      window.localStorage.setItem(HELP_SEEN_KEY, "true");
-    } catch {
-      // The in-app help remains available from its button if storage is blocked.
-    }
   }
 
   function startGuide() {
@@ -635,61 +644,20 @@ function App() {
     setCaptureBusy(true);
     setCaptureMessage("");
     try {
-      const scale = Math.min(1, MAX_CAPTURE_FRAME_DIMENSION / Math.max(video.videoWidth, video.videoHeight));
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
-      canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
-      const context = canvas.getContext("2d", { alpha: false });
-      if (!context) throw new Error("2D canvas is unavailable");
-      context.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const imageBlob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Could not encode capture frame")), "image/jpeg", 0.88);
-      });
+      const frame = await captureCurrentFrame(video);
 
       const nextFrameNumber = captureRows.length + 1;
       const frameId = `frame-${String(nextFrameNumber).padStart(4, "0")}`;
       const filename = `${captureSessionId}_${captureFishId}_${frameId}.jpg`;
-      const row: CaptureRow = {
-        fish_species: chosenFish,
-        session_id: captureSessionId,
-        fish_id: captureFishId,
-        frame_id: frameId,
-        relative_time_ms: Math.max(0, Math.round(performance.now() - (captureStartedAt.current ?? performance.now()))),
-        frame_path: filename,
-        confirmed_stage: captureStage,
-        head_status: captureHeadStatus,
-        head_status_source: captureHeadStatusSource,
-        tail_status: captureTailStatus,
-        tail_status_source: captureTailStatusSource,
-        hands_visible: captureHandsVisible,
-        knife_visible: captureKnifeVisible,
-        occlusion: captureOcclusion,
-        device_model: captureDeviceModel.trim() || "unknown",
-        camera_view: captureCameraView,
-        lighting: captureLighting,
-        review_status: "needs_review",
-        notes: captureNotes.trim(),
-        ai_status: headTailDetection.status,
-        ai_observation_json: headTailDetection.observation ? JSON.stringify(headTailDetection.observation) : "",
-        head_bbox_x: "",
-        head_bbox_y: "",
-        head_bbox_width: "",
-        head_bbox_height: "",
-        head_bbox_source: "unknown",
-        tail_bbox_x: "",
-        tail_bbox_y: "",
-        tail_bbox_width: "",
-        tail_bbox_height: "",
-        tail_bbox_source: "unknown",
-      };
 
-      const previewUrl = URL.createObjectURL(imageBlob);
+      const previewUrl = URL.createObjectURL(frame.blob);
       setPendingCapture({
-        blob: imageBlob,
+        kind: "head_tail",
+        blob: frame.blob,
         previewUrl,
-        width: canvas.width,
-        height: canvas.height,
-        row,
+        width: frame.width,
+        height: frame.height,
+        row: makeCaptureRow(frameId, filename, "needs_review", false),
         activePart: "head",
         headBox: null,
         tailBox: null,
@@ -703,6 +671,115 @@ function App() {
     } finally {
       setCaptureBusy(false);
     }
+  }
+
+  async function saveStageCaptureFrame() {
+    const video = videoRef.current;
+    if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.videoWidth < 1 || video.videoHeight < 1) {
+      setCaptureMessage("カメラ映像の準備ができるまで待ってください。");
+      return;
+    }
+    if (!CAPTURE_ID_PATTERN.test(captureSessionId) || !CAPTURE_ID_PATTERN.test(captureFishId)) {
+      setCaptureMessage("撮影IDと魚IDは英数字、ピリオド、ハイフン、アンダースコアで入力してください。");
+      return;
+    }
+    if (!stageCaptureSupported) {
+      setCaptureMessage("工程モデル用のデータ収集はハマチ・アジ・サバ・タイだけに対応しています。");
+      return;
+    }
+    if (captureStage === "unknown" || captureStage === "other") {
+      setCaptureMessage("画像に写っている工程を選んでください。");
+      return;
+    }
+    if (captureRows.length >= MAX_CAPTURE_FRAMES) {
+      setCaptureMessage(`1セッションの上限${MAX_CAPTURE_FRAMES}枚に達しました。CSVを保存してください。`);
+      return;
+    }
+
+    setCaptureBusy(true);
+    setCaptureMessage("");
+    try {
+      const frame = await captureCurrentFrame(video);
+      const nextFrameNumber = captureRows.length + 1;
+      const frameId = `frame-${String(nextFrameNumber).padStart(4, "0")}`;
+      const filename = `${captureSessionId}_${captureFishId}_${frameId}.jpg`;
+      const previewUrl = URL.createObjectURL(frame.blob);
+      setPendingCapture({
+        kind: "stage",
+        blob: frame.blob,
+        previewUrl,
+        width: frame.width,
+        height: frame.height,
+        row: makeCaptureRow(frameId, filename, "needs_review", true),
+        activePart: "head",
+        headBox: null,
+        tailBox: null,
+        dragStart: null,
+        draftBox: null,
+      });
+      setCaptureLabelsConfirmed(false);
+      setCaptureMessage("撮影画像を確認し、選択した工程と一致している場合に保存してください。");
+    } catch {
+      setCaptureMessage("画像を保存できませんでした。ブラウザーのダウンロード許可と空き容量を確認してください。");
+    } finally {
+      setCaptureBusy(false);
+    }
+  }
+
+  async function captureCurrentFrame(video: HTMLVideoElement): Promise<{ blob: Blob; width: number; height: number }> {
+    const scale = Math.min(1, MAX_CAPTURE_FRAME_DIMENSION / Math.max(video.videoWidth, video.videoHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) throw new Error("2D canvas is unavailable");
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((result) => result ? resolve(result) : reject(new Error("Could not encode capture frame")), "image/jpeg", 0.88);
+    });
+    return { blob, width: canvas.width, height: canvas.height };
+  }
+
+  function makeCaptureRow(frameId: string, filename: string, reviewStatus: CaptureRow["review_status"], stageOnly: boolean): CaptureRow {
+    return {
+      fish_species: chosenFish,
+      session_id: captureSessionId,
+      fish_id: captureFishId,
+      frame_id: frameId,
+      relative_time_ms: Math.max(0, Math.round(performance.now() - (captureStartedAt.current ?? performance.now()))),
+      frame_path: filename,
+      confirmed_stage: captureStage,
+      head_status: stageOnly ? "unknown" : captureHeadStatus,
+      head_status_source: stageOnly ? "unknown" : captureHeadStatusSource,
+      tail_status: stageOnly ? "unknown" : captureTailStatus,
+      tail_status_source: stageOnly ? "unknown" : captureTailStatusSource,
+      hands_visible: stageOnly ? "unknown" : captureHandsVisible,
+      knife_visible: stageOnly ? "unknown" : captureKnifeVisible,
+      occlusion: stageOnly ? "unknown" : captureOcclusion,
+      device_model: stageOnly ? "unknown" : captureDeviceModel.trim() || "unknown",
+      camera_view: stageOnly ? "unknown" : captureCameraView,
+      lighting: stageOnly ? "unknown" : captureLighting,
+      review_status: reviewStatus,
+      notes: stageOnly ? "" : captureNotes.trim(),
+      ai_status: stageOnly ? "idle" : headTailDetection.status,
+      ai_observation_json: stageOnly || !headTailDetection.observation ? "" : JSON.stringify(headTailDetection.observation),
+      head_bbox_x: "",
+      head_bbox_y: "",
+      head_bbox_width: "",
+      head_bbox_height: "",
+      head_bbox_source: "unknown",
+      tail_bbox_x: "",
+      tail_bbox_y: "",
+      tail_bbox_width: "",
+      tail_bbox_height: "",
+      tail_bbox_source: "unknown",
+    };
+  }
+
+  function captureStageName(stage: CaptureStage): string {
+    if (stage === "unknown") return "不明";
+    if (stage === "other") return "その他";
+    return fishStageLabel(stage);
   }
 
   function annotationPoint(event: ReactPointerEvent<SVGSVGElement>) {
@@ -785,29 +862,36 @@ function App() {
 
   function confirmPendingCapture() {
     if (!pendingCapture) return;
-    const head = normalizedBoxColumns(pendingCapture.headBox);
-    const tail = normalizedBoxColumns(pendingCapture.tailBox);
-    const row: CaptureRow = {
-      ...pendingCapture.row,
-      review_status: captureLabelsConfirmed ? "reviewed" : "needs_review",
-      head_status_source: captureLabelsConfirmed ? "manual" : pendingCapture.row.head_status_source,
-      tail_status_source: captureLabelsConfirmed ? "manual" : pendingCapture.row.tail_status_source,
-      head_bbox_x: head.x,
-      head_bbox_y: head.y,
-      head_bbox_width: head.width,
-      head_bbox_height: head.height,
-      head_bbox_source: head.source,
-      tail_bbox_x: tail.x,
-      tail_bbox_y: tail.y,
-      tail_bbox_width: tail.width,
-      tail_bbox_height: tail.height,
-      tail_bbox_source: tail.source,
-    };
+    let row: CaptureRow;
+    if (pendingCapture.kind === "stage") {
+      row = { ...pendingCapture.row, review_status: captureLabelsConfirmed ? "reviewed" : "needs_review" };
+    } else {
+      const head = normalizedBoxColumns(pendingCapture.headBox);
+      const tail = normalizedBoxColumns(pendingCapture.tailBox);
+      row = {
+        ...pendingCapture.row,
+        review_status: captureLabelsConfirmed ? "reviewed" : "needs_review",
+        head_status_source: captureLabelsConfirmed ? "manual" : pendingCapture.row.head_status_source,
+        tail_status_source: captureLabelsConfirmed ? "manual" : pendingCapture.row.tail_status_source,
+        head_bbox_x: head.x,
+        head_bbox_y: head.y,
+        head_bbox_width: head.width,
+        head_bbox_height: head.height,
+        head_bbox_source: head.source,
+        tail_bbox_x: tail.x,
+        tail_bbox_y: tail.y,
+        tail_bbox_width: tail.width,
+        tail_bbox_height: tail.height,
+        tail_bbox_source: tail.source,
+      };
+    }
     downloadCaptureFile(pendingCapture.blob, row.frame_path);
     setCaptureRows((rows) => [...rows, row]);
     setCaptureManifestExported(false);
-    
-    setCaptureMessage(`${row.frame_path} を保存しました。枠は人の確認ラベルとしてCSVに記録しました。`);
+    setCaptureLabelsConfirmed(false);
+    setCaptureMessage(pendingCapture.kind === "stage"
+      ? `${row.frame_path} を保存しました。工程を記録し、頭・尾など別の項目は不明のままにしました。`
+      : `${row.frame_path} を保存しました。枠は人の確認ラベルとしてCSVに記録しました。`);
     URL.revokeObjectURL(pendingCapture.previewUrl);
     setPendingCapture(null);
   }
@@ -852,9 +936,13 @@ function App() {
 
     if (guideSessionMode === "local") {
       const session = advanceLocalGuideSession(guideSession);
+      if (session.status === "completed") {
+        backToFishSelection();
+        return;
+      }
       setGuideSession(session);
       setActiveStep(Math.min(session.currentStepIndex, session.guide.steps.length - 1));
-      setGuideMessage(session.status === "completed" ? "このガイドを完了しました。" : "");
+      setGuideMessage("");
       return;
     }
 
@@ -874,9 +962,13 @@ function App() {
     try {
       const session = await advanceGuideSession(guideSession, signal);
       if (signal.aborted) return;
+      if (session.status === "completed") {
+        backToFishSelection();
+        return;
+      }
       setGuideSession(session);
       setActiveStep(Math.min(session.currentStepIndex, session.guide.steps.length - 1));
-      setGuideMessage(session.status === "completed" ? "このガイドを完了しました。" : "");
+      setGuideMessage("");
     } catch {
       if (!signal.aborted) setGuideMessage("工程を更新できませんでした。現在の手順を確認して、もう一度お試しください。");
     } finally {
@@ -901,31 +993,6 @@ function App() {
       ? `検出: ${headTailDetection.observation.detections.map((detection) => `${detection.label === "head" ? "頭" : "尾"} ${Math.round(detection.score * 100)}%`).join(" · ")}`
       : "頭・尾を探しています。検出されないことだけでは、切除済みとは判断しません。"
     : headTailDetection.message;
-  const guideDetectionTitle = headTailDetection.status === "active"
-    ? "頭・尾を確認中"
-    : headTailDetection.status === "loading"
-      ? "AI準備中"
-      : headTailDetection.status === "paused"
-        ? "認識一時停止"
-        : headTailDetection.status === "unavailable"
-          ? "認識モデルなし"
-          : headTailDetection.status === "error"
-            ? "認識エラー"
-            : "AI待機中";
-  const guideDetectionSummary = headTailDetection.status === "active"
-    ? headTailDetection.observation?.detections.length
-      ? "検出枠を表示中"
-      : "頭・尾を探しています"
-    : headTailDetection.status === "loading"
-      ? "認識モデルを読み込み中"
-      : headTailDetection.status === "paused"
-        ? "画面を表示すると再開します"
-        : headTailDetection.status === "unavailable"
-          ? "AIを利用できません"
-          : headTailDetection.status === "error"
-            ? "カメラを再起動してください"
-            : "カメラ起動後に確認します";
-
   return (
     <main className={`app-root ${screen === "guide" ? "is-guide" : screen === "capture" ? "is-capture" : ""}`}>
       {screen === "select" ? (
@@ -1018,7 +1085,7 @@ function App() {
 
             <button className="start-button" type="button" disabled={!fishCanContinue} onClick={() => void startGuide()}>
               <strong>俺を捌け！</strong>
-              <span>{selectedGuideFishId ? "魚種別の参考手順で進む" : "この魚の手順は準備中"}</span>
+              <span>{selectedGuideFishId ? "この魚を捌く" : "この魚の手順は準備中"}</span>
             </button>
             <button className="capture-entry-button" type="button" disabled={!fishCanContinue} onClick={startCapture}>
               研究用データを撮る
@@ -1103,6 +1170,10 @@ function App() {
                 <label className="capture-field"><span>端末機種（任意）</span><input value={captureDeviceModel} onChange={(event) => { setCaptureDeviceModel(event.currentTarget.value);  }} maxLength={120} placeholder="不明（任意）" /></label>
               </div>
 
+              <button className="capture-export-button" type="button" onClick={() => void saveStageCaptureFrame()} disabled={!stageCaptureSupported || cameraStatus !== "active" || captureBusy || captureRows.length >= MAX_CAPTURE_FRAMES || captureStage === "unknown" || captureStage === "other"}>
+                {captureBusy ? "保存中…" : "工程画像を保存（頭・尾の枠なし）"}
+              </button>
+              <p className="capture-label-hint">{stageCaptureSupported ? "工程分類のデータを集める場合はこちら。画像と工程ラベルが一致するか保存前に確認し、ほかの項目は「不明」で記録します。" : "工程分類用のデータ収集はハマチ・アジ・サバ・タイが対象です。"}</p>
               <div className="capture-field-grid capture-presence-grid">
                 <label className="capture-field"><span>手の映り込み</span><select value={captureHandsVisible} onChange={(event) => { setCaptureHandsVisible(event.currentTarget.value as PresenceStatus);  }}><option value="unknown">不明</option><option value="true">映っている</option><option value="false">映っていない</option></select></label>
                 <label className="capture-field"><span>包丁の映り込み</span><select value={captureKnifeVisible} onChange={(event) => { setCaptureKnifeVisible(event.currentTarget.value as PresenceStatus);  }}><option value="unknown">不明</option><option value="true">映っている</option><option value="false">映っていない</option></select></label>
@@ -1122,18 +1193,24 @@ function App() {
             <div className="capture-annotation-backdrop">
               <section className="capture-annotation-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-annotation-title">
                 <header className="capture-annotation-heading">
-                  <div><span>人手の正解ラベル</span><h2 id="capture-annotation-title">頭・尾の枠を確認</h2></div>
+                  <div><span>人手の正解ラベル</span><h2 id="capture-annotation-title">{pendingCapture.kind === "stage" ? "工程画像を確認" : "頭・尾の枠を確認"}</h2></div>
                   <button type="button" onClick={backFromCapture} aria-label="撮影画面を閉じる">×</button>
                 </header>
-                <p>画像上をドラッグして枠を描きます。AIの候補は別に保存済みで、ここには自動コピーされません。該当部位が見えない場合は枠を付けず、状態ラベルを「遮蔽・画角外・未確認」から選んでください。</p>
-                <div className="capture-annotation-tools">
-                  <button type="button" className={pendingCapture.activePart === "head" ? "is-active" : ""} onClick={() => setPendingCapture((current) => current ? { ...current, activePart: "head" } : current)}>頭の枠 {pendingCapture.headBox ? "✓" : "未設定"}</button>
-                  <button type="button" className={pendingCapture.activePart === "tail" ? "is-active" : ""} onClick={() => setPendingCapture((current) => current ? { ...current, activePart: "tail" } : current)}>尾の枠 {pendingCapture.tailBox ? "✓" : "未設定"}</button>
-                  <button type="button" onClick={() => clearAnnotation("head")} disabled={!pendingCapture.headBox}>頭を消す</button>
-                  <button type="button" onClick={() => clearAnnotation("tail")} disabled={!pendingCapture.tailBox}>尾を消す</button>
-                </div>
+                <p>{pendingCapture.kind === "stage"
+                  ? `選択した工程「${captureStageName(pendingCapture.row.confirmed_stage)}」と画像が一致しているか確認します。頭・尾などほかの状態は不明として記録します。`
+                  : "画像上をドラッグして枠を描きます。AIの候補は別に保存済みで、ここには自動コピーされません。該当部位が見えない場合は枠を付けず、状態ラベルを「遮蔽・画角外・未確認」から選んでください。"}</p>
+                {pendingCapture.kind === "head_tail" ? (
+                  <div className="capture-annotation-tools">
+                    <button type="button" className={pendingCapture.activePart === "head" ? "is-active" : ""} onClick={() => setPendingCapture((current) => current ? { ...current, activePart: "head" } : current)}>頭の枠 {pendingCapture.headBox ? "✓" : "未設定"}</button>
+                    <button type="button" className={pendingCapture.activePart === "tail" ? "is-active" : ""} onClick={() => setPendingCapture((current) => current ? { ...current, activePart: "tail" } : current)}>尾の枠 {pendingCapture.tailBox ? "✓" : "未設定"}</button>
+                    <button type="button" onClick={() => clearAnnotation("head")} disabled={!pendingCapture.headBox}>頭を消す</button>
+                    <button type="button" onClick={() => clearAnnotation("tail")} disabled={!pendingCapture.tailBox}>尾を消す</button>
+                  </div>
+                ) : null}
                 <div className="capture-annotation-canvas-wrap">
-                  <svg
+                  {pendingCapture.kind === "stage" ? (
+                    <img className="capture-annotation-image is-preview-only" src={pendingCapture.previewUrl} alt="工程を確認する撮影画像" />
+                  ) : <svg
                     className="capture-annotation-image"
                     viewBox={`0 0 ${pendingCapture.width} ${pendingCapture.height}`}
                     width={pendingCapture.width}
@@ -1150,16 +1227,16 @@ function App() {
                     {pendingCapture.headBox ? <rect className="capture-box-head" x={pendingCapture.headBox.x * pendingCapture.width} y={pendingCapture.headBox.y * pendingCapture.height} width={pendingCapture.headBox.width * pendingCapture.width} height={pendingCapture.headBox.height * pendingCapture.height} /> : null}
                     {pendingCapture.tailBox ? <rect className="capture-box-tail" x={pendingCapture.tailBox.x * pendingCapture.width} y={pendingCapture.tailBox.y * pendingCapture.height} width={pendingCapture.tailBox.width * pendingCapture.width} height={pendingCapture.tailBox.height * pendingCapture.height} /> : null}
                     {pendingCapture.draftBox ? <rect className={`capture-box-draft is-${pendingCapture.activePart}`} x={pendingCapture.draftBox.x * pendingCapture.width} y={pendingCapture.draftBox.y * pendingCapture.height} width={pendingCapture.draftBox.width * pendingCapture.width} height={pendingCapture.draftBox.height * pendingCapture.height} /> : null}
-                  </svg>
+                  </svg>}
                 </div>
-                <label className="capture-annotation-confirm"><input type="checkbox" checked={captureLabelsConfirmed} onChange={(event) => setCaptureLabelsConfirmed(event.currentTarget.checked)} />この画像を見て、工程・頭尾の状態ラベルを確認した（AI候補を採用する場合も人が確認）</label>
+                <label className="capture-annotation-confirm"><input type="checkbox" checked={captureLabelsConfirmed} onChange={(event) => setCaptureLabelsConfirmed(event.currentTarget.checked)} />{pendingCapture.kind === "stage" ? "画像と選択した工程ラベルが一致している" : "この画像を見て、工程・頭尾の状態ラベルを確認した（AI候補を採用する場合も人が確認）"}</label>
                 <footer className="capture-annotation-actions">
                   <button type="button" onClick={() => {
                     URL.revokeObjectURL(pendingCapture.previewUrl);
                     setPendingCapture(null);
                     setCaptureMessage("撮影画像の保存を取り消しました。");
                   }}>この画像を破棄</button>
-                  <button type="button" className="is-primary" onClick={confirmPendingCapture}>{captureLabelsConfirmed ? "確認済みとして保存" : "未確認として保存"}</button>
+                  <button type="button" className="is-primary" onClick={confirmPendingCapture}>{pendingCapture.kind === "stage" ? captureLabelsConfirmed ? "工程ラベルを確認して保存" : "未確認で保存" : captureLabelsConfirmed ? "確認済みとして保存" : "未確認として保存"}</button>
                 </footer>
               </section>
             </div>
@@ -1178,9 +1255,7 @@ function App() {
             <div className="orientation-main">
               <RotatePhoneIcon />
               <h1>画面を横に<br />してください</h1>
-              <p>横画面で、カメラと魚種別の参考手順を並べて表示します。</p>
-              <span className="orientation-fish">選択中：{chosenFish}</span>
-              <p className="orientation-hint">工程の自動判定はありません。画面の手順を確認して進めてください。</p>
+              <span className="orientation-fish">{chosenFish}</span>
             </div>
             {cameraMessage ? <p className="orientation-message" role="status">{cameraMessage}</p> : null}
             {cameraStatus === "active" ? (
@@ -1228,7 +1303,7 @@ function App() {
                 </section>
 
                 <aside className="guide-fish-stage" aria-label={`${chosenFish}先生`}>
-                  <div className="guide-fish-bubble">一緒に確認しよう！</div>
+                  <div className="guide-fish-bubble" aria-live="polite">{fishTeacherDialogue(currentStep)}</div>
                   {selectedFishVisualData ? (
                     <img
                       className={fishImageClass("guide-fish-image")}
@@ -1244,13 +1319,6 @@ function App() {
                   <div className="guide-step" aria-live="polite">
                     <h2>{currentStep.title}</h2>
                     <p>{currentStep.description}</p>
-                    {guideSession?.guide.source === "public_reference" ? (
-                      <details className="guide-source">
-                        <summary>出典</summary>
-                        <a href={guideSession.guide.sourceUrl} target="_blank" rel="noreferrer">{guideSession.guide.sourceLabel}</a>
-                        {!guideSession.guide.expertReviewed ? <small>公開資料の要約です。専門家レビュー前です。</small> : null}
-                      </details>
-                    ) : null}
                     {guideMessage ? <p className="guide-message" role="status">{guideMessage}</p> : null}
                   </div>
                 ) : (
@@ -1259,25 +1327,14 @@ function App() {
                     <p>{guideMessage || "公開資料を確認した魚種から順に追加しています。共通の仮手順を魚種別ガイドとして表示することはありません。"}</p>
                   </div>
                 )}
-                <div className="observation-note guide-observation-note" data-state={headTailDetection.status} aria-live="off">
-                  <span aria-hidden="true">AI</span>
-                  <div className="guide-observation-copy">
-                    <div className="guide-observation-heading">
-                      <strong>{guideDetectionTitle}</strong>
-                      <span className="guide-manual-label">工程は手動</span>
-                    </div>
-                    <small>{guideDetectionSummary}</small>
-                  </div>
-                  <details className="guide-observation-details">
-                    <summary aria-label="AI表示の詳細と注意事項">i</summary>
-                    <div className="guide-observation-popover">
-                      <p><strong>{detectionTitle}</strong></p>
-                      <p>{detectionResult}</p>
-                      <p>工程は自動で進みません。頭・尾の表示は参考用で、切除済みかどうかは利用者が確認してください。</p>
-                      <p>試験モデルは公開魚画像で学習しており、調理台の魚では未検証です。</p>
-                    </div>
-                  </details>
-                </div>
+                {suggestedStep && stageTransition ? (
+                  <section className="guide-stage-suggestion" aria-live="polite">
+                    <span>工程変化を検知：{fishStageLabel(stageTransition.to)}</span>
+                    <strong>次の案内候補「{suggestedStep.title}」</strong>
+                    <p>{suggestedStep.description}</p>
+                    <small>状態判定は提案です。魚と手元を確認してから「次の工程へ」を押してください。</small>
+                  </section>
+                ) : null}
                 <div className="guide-actions">
                   <div className="guide-controls">
                     <button type="button" onClick={() => { setActiveStep((step) => Math.max(0, step - 1)); setGuideMessage(""); }} disabled={!guideSession || activeStep === 0}>戻る</button>

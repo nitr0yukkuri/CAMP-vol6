@@ -21,6 +21,7 @@ ml/generated/
 ml/runs/
 ml/output/
 apps/web/public/models/*.tflite
+apps/web/public/models/fish-stage/*.tflite
 apps/web/public/mediapipe/wasm/
 data/analysis/mendeley-label-preview.jpg
 # Keep phone-captured samples and per-session exports out of Git.

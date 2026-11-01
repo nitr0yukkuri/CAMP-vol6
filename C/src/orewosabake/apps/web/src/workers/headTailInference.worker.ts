@@ -1,4 +1,4 @@
-import { MediaPipeHeadTailDetector } from "../model/mediapipeHeadTailDetector";
+import { MediaPipeFishInference } from "../model/mediapipeHeadTailDetector";
 import type { HeadTailWorkerRequest, HeadTailWorkerResponse } from "../model/headTailWorkerProtocol";
 
 type WorkerScope = {
@@ -7,7 +7,7 @@ type WorkerScope = {
 };
 
 const workerScope = self as unknown as WorkerScope;
-let detector: MediaPipeHeadTailDetector | null = null;
+let detector: MediaPipeFishInference | null = null;
 let initialization: Promise<void> | null = null;
 
 function errorMessage(error: unknown): string {
@@ -18,13 +18,17 @@ function errorMessage(error: unknown): string {
 workerScope.addEventListener("message", (event) => {
   const request = event.data;
   if (request.type === "initialize") {
-    initialization ??= MediaPipeHeadTailDetector.create(request.modelPath, request.wasmPath)
+    initialization ??= MediaPipeFishInference.create(request.modelPath, request.wasmPath, request.fishStageModelPath)
       .then((readyDetector) => {
         detector = readyDetector;
       });
 
     void initialization.then(
-      () => workerScope.postMessage({ type: "ready" }),
+      () => workerScope.postMessage({
+        type: "ready",
+        fishStageStatus: detector?.fishStagePredictionStatus ?? "unavailable",
+        fishStageMessage: detector?.fishStageStatusMessage ?? "工程判定モデルが利用できません。",
+      }),
       (error: unknown) => workerScope.postMessage({ type: "error", message: errorMessage(error) }),
     );
     return;
@@ -37,8 +41,13 @@ workerScope.addEventListener("message", (event) => {
   }
 
   try {
-    const observation = detector.detectBitmapFrame(request.bitmap, request.timestampMs, request.capturedAt);
-    workerScope.postMessage({ type: "result", observation });
+    const result = detector.detectBitmapFrame(request.bitmap, request.timestampMs, request.capturedAt);
+    workerScope.postMessage({
+      type: "result",
+      observation: result.observation,
+      fishStagePrediction: result.fishStagePrediction,
+      ...(result.fishStageError ? { fishStageError: result.fishStageError } : {}),
+    });
   } catch (error) {
     workerScope.postMessage({ type: "error", message: errorMessage(error) });
   } finally {

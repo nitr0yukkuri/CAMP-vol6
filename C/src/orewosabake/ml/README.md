@@ -108,18 +108,55 @@ The script prints the exact command to train. The pinned dependencies resolve th
 
 ## Browser model adapter
 
-The web client checks for `apps/web/public/models/head-tail.tflite` when the camera starts and loads it through MediaPipe Tasks Vision `ObjectDetector` in `VIDEO` mode inside a dedicated Web Worker. It samples the local camera about once per second, scales each frame proportionally to a maximum dimension of 832 pixels (matching the source image size), transfers one `ImageBitmap` at a time to that worker, and terminates the worker when the camera/guide is stopped. The MediaPipe WASM files come from the lockfile-pinned npm package and are copied into the ignored public directory before dev/build, then served from the same origin as the app. This removes the runtime CDN dependency. Frames stay inside the browser and are not sent to the API or an external service. The result is schema-validated when it crosses back to the React thread, and old results are discarded. The guide's manual session remains independent of detections, and a missing head/tail detection is not treated as evidence that a part was removed.
+The web client loads `apps/web/public/models/head-tail.tflite` through MediaPipe Tasks Vision `ObjectDetector` in `VIDEO` mode inside a dedicated Web Worker. It also looks for a separate, optional fish-specific stage classifier at `apps/web/public/models/fish-stage/{fishId}.tflite`; when present, the same sampled `ImageBitmap` is passed through MediaPipe `ImageClassifier` in `VIDEO` mode. Both tasks sample the local camera about once per second, and the worker is terminated when the camera/guide is stopped. Frames stay in the browser and are not sent to the API or an external service. Stage predictions need three consecutive matches at the initial 0.70 confidence floor before the app reports a stable stage change. That floor and cadence are prototype defaults, not calibrated thresholds. A detected change presents the next guide step as a suggestion; it does not silently advance the reviewed procedure.
+
+The stage model is independent for each supported fish (`hamachi`, `aji`, `saba`, `tai`). It uses the reviewed `confirmed_stage` values from research captures: `whole`, `head_removed`, `gutted`, `filleting`, and `finished`. `unknown`, `other`, and unreviewed rows are excluded. A missing stage model leaves stage recognition visibly unavailable while head/tail detection can continue. The current capture manifest is only an empty template, so no stage model has been trained or copied to the app yet.
+
+### Train a fish-specific stage classifier
+
+First capture reviewed frames across independent fish and camera sessions. In the generated split template, assign every connected group of the same `fish_id` or `session_id` to exactly one of `train`, `validation`, or `test`. Keep every class represented in all three splits. The converter rejects a split that lacks even one of the five stage labels, ensuring evaluation is not reported on a partial class list.
+
+```powershell
+python ml/prepare_stage_capture.py `
+  --manifest "D:\fish-pilot\capture-manifest.csv" `
+  --images-dir "D:\fish-pilot" `
+  --fish-id hamachi `
+  --write-split-template
+```
+
+Assign the groups in `ml/generated/fish-stage/hamachi/split-plan/group-split-template.csv`, then prepare the images:
+
+```powershell
+python ml/prepare_stage_capture.py `
+  --manifest "D:\fish-pilot\capture-manifest.csv" `
+  --images-dir "D:\fish-pilot" `
+  --fish-id hamachi `
+  --split-map ml/generated/fish-stage/hamachi/split-plan/group-split-template.csv
+```
+
+Train in the repository's isolated WSL Python 3.10 environment. The command saves the model and report under the ignored generated folder. It evaluates both Model Maker's held-out split and the exported TFLite file through MediaPipe Tasks, then reports per-class precision/recall/F1 and a confusion matrix. The model is deliberately not copied into the web app automatically.
+
+```bash
+model_maker_python="${XDG_DATA_HOME:-$HOME/.local/share}/orewosabake/model-maker/venv/bin/python"
+"$model_maker_python" ml/train_stage_classifier.py --fish-id hamachi
+```
+
+Review the held-out per-class errors and the capture conditions before promoting. To use a reviewed model locally, copy `ml/generated/fish-stage/hamachi/model/fish-stage-hamachi.tflite` to `apps/web/public/models/fish-stage/hamachi.tflite`. Repeat with separate data for each fish. Do not interpret one model's results as evidence for other fish or capture conditions. Google's Model Maker guide suggests about 100 images per class as a starting point, not an accuracy guarantee; use more independent fish/sessions and actual phone video before relying on live prompts.
+
+The converter also writes `stage-samples.csv` with the test frames' fish/session IDs and capture times. The training report replays those time-ordered test frames through MediaPipe's `VIDEO` classifier, applies the app's 0.70 confidence floor and three-frame debounce, then reports transition precision, recall, misses, false alarms, and detection delay. The app resets its candidate and establishes a new baseline after a gap over 2.5 seconds or a hidden tab; it only suggests the immediately following instruction when the current instruction's expected state matches the detected state. A ground-truth transition is counted only when adjacent reviewed test frames are at most 2.5 seconds apart; therefore this is a sparse-sequence measure, not full-video action recognition. Capture around every stage change at roughly the app's one-frame-per-second cadence. The timing settings are prototype defaults and must be checked on longer, independent phone videos before the suggestion is treated as dependable.
 
 MediaPipe's web `detectForVideo()` call is synchronous, so it runs in the worker to keep the React thread responsive. The current cadence is 1 Hz with at most one frame in flight. Phone-specific latency and camera compatibility still need measurement.
 
-## What the experiment cannot answer
+## Current capability and limits
 
 - It detects visible head/tail regions, not whether a missing part was cut off, hidden by a hand/tool, or outside the frame.
-- It cannot recognize preparation stages because no stage labels are present.
+- The current head/tail model cannot recognize preparation stages. Stage changes remain unavailable until a fish-specific classifier is trained from reviewed smartphone captures and installed at the path above.
 - It cannot establish that a knife action is safe or complete.
 - Its public test images do not represent the intended smartphone, board, lighting, hand, knife, or single-fish setup.
 
-Stage recognition needs phone-view frames with confirmed stage labels, explicit visibility labels (`present_visible`, `removed_confirmed`, `occluded`, `out_of_frame`, `unknown`), and data splits grouped by both fish and capture session.
+Even with a stage model, the predicted class is an image-level estimate, not proof that a cut is complete. Obstruction, poor framing, reflections, lighting, and changes in the board/background can look like a stage change. The 0.70 threshold and 3-frame debounce need calibration against held-out sessions on the target phones. Unknown or low-confidence output must remain uncertain, and people still verify the next action.
+
+The classifier currently trains only on the five known stages; `unknown` and `other` capture rows are excluded. A high softmax score does not prove that an image belongs to one of those stages, so an unfamiliar view can still be confidently misclassified and produce a suggestion. Treat every suggestion as a prompt to inspect the fish, not as a completion check.
 
 ## Official references
 
@@ -127,4 +164,6 @@ Stage recognition needs phone-view frames with confirmed stage labels, explicit 
 - [MediaPipe Model Maker status and limitations](https://developers.google.com/edge/mediapipe/solutions/model_maker)
 - [MediaPipe Object Detector customization and TFLite export](https://developers.google.com/edge/mediapipe/solutions/customization/object_detector)
 - [MediaPipe Tasks Object Detector web guide and model requirements](https://developers.google.com/edge/mediapipe/solutions/vision/object_detector/web_js)
+- [MediaPipe Image Classifier customization and TFLite export](https://developers.google.com/edge/mediapipe/solutions/customization/image_classifier)
+- [MediaPipe Tasks Image Classifier API](https://ai.google.dev/edge/api/mediapipe/python/mp/tasks/vision/ImageClassifier)
 - [Model Maker PyPI release and Python classifiers](https://pypi.org/project/mediapipe-model-maker/)
