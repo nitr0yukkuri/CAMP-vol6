@@ -379,7 +379,6 @@ function App() {
   const [captureDeviceModel, setCaptureDeviceModel] = useState("");
   const [captureCameraView, setCaptureCameraView] = useState("unknown");
   const [captureLighting, setCaptureLighting] = useState("unknown");
-  const [captureReviewed, setCaptureReviewed] = useState(false);
   const [captureNotes, setCaptureNotes] = useState("");
   const [captureRows, setCaptureRows] = useState<CaptureRow[]>([]);
   const [captureBusy, setCaptureBusy] = useState(false);
@@ -400,7 +399,6 @@ function App() {
   useEffect(() => {
     if (screen !== "capture") return;
     const visibleParts = new Set(headTailDetection.observation?.detections.map((detection) => detection.label) ?? []);
-    let suggested = false;
 
     if (captureHeadStatusSource !== "manual") {
       const nextStatus = visibleParts.has("head") ? "present_visible" : "unknown";
@@ -408,7 +406,6 @@ function App() {
       if (captureHeadStatus !== nextStatus || captureHeadStatusSource !== nextSource) {
         setCaptureHeadStatus(nextStatus);
         setCaptureHeadStatusSource(nextSource);
-        suggested = true;
       }
     }
     if (captureTailStatusSource !== "manual") {
@@ -417,10 +414,8 @@ function App() {
       if (captureTailStatus !== nextStatus || captureTailStatusSource !== nextSource) {
         setCaptureTailStatus(nextStatus);
         setCaptureTailStatusSource(nextSource);
-        suggested = true;
       }
     }
-    if (suggested) setCaptureReviewed(false);
   }, [
     captureHeadStatus,
     captureHeadStatusSource,
@@ -587,6 +582,7 @@ function App() {
 
   function startCapture() {
     setCaptureSessionId(createCaptureSessionId());
+    setCaptureLabelsConfirmed(false);
     setCaptureRows([]);
     setCaptureManifestExported(false);
     setCaptureMessage("");
@@ -602,7 +598,7 @@ function App() {
     setCaptureCameraView("unknown");
     setCaptureLighting("unknown");
     setCaptureNotes("");
-    setCaptureReviewed(false);
+    
     captureStartedAt.current = null;
     setScreen("capture");
   }
@@ -621,6 +617,7 @@ function App() {
   }
 
   async function saveCaptureFrame() {
+    if (pendingCapture) return;
     const video = videoRef.current;
     if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.videoWidth < 1 || video.videoHeight < 1) {
       setCaptureMessage("カメラ映像の準備ができるまで待ってください。");
@@ -699,7 +696,7 @@ function App() {
         dragStart: null,
         draftBox: null,
       });
-      setCaptureLabelsConfirmed(captureReviewed);
+      setCaptureLabelsConfirmed(false);
       setCaptureMessage("撮影画像で頭・尾の正解枠を確認してください。AIの枠は自動では正解にしません。");
     } catch {
       setCaptureMessage("画像を保存できませんでした。ブラウザーのダウンロード許可と空き容量を確認してください。");
@@ -809,7 +806,7 @@ function App() {
     downloadCaptureFile(pendingCapture.blob, row.frame_path);
     setCaptureRows((rows) => [...rows, row]);
     setCaptureManifestExported(false);
-    setCaptureReviewed(false);
+    
     setCaptureMessage(`${row.frame_path} を保存しました。枠は人の確認ラベルとしてCSVに記録しました。`);
     URL.revokeObjectURL(pendingCapture.previewUrl);
     setPendingCapture(null);
@@ -1064,7 +1061,7 @@ function App() {
               </div>
               <div className="capture-camera-actions">
                 <span>{captureRows.length} / {MAX_CAPTURE_FRAMES} 枚 保存済み</span>
-                <button type="button" onClick={() => void saveCaptureFrame()} disabled={cameraStatus !== "active" || captureBusy || captureRows.length >= MAX_CAPTURE_FRAMES}>
+                <button type="button" onClick={() => void saveCaptureFrame()} disabled={cameraStatus !== "active" || captureBusy || pendingCapture !== null || captureRows.length >= MAX_CAPTURE_FRAMES}>
                   {captureBusy ? "保存中…" : "撮影して保存"}
                 </button>
                 {cameraStatus === "active" ? <button className="capture-stop-button" type="button" onClick={stopCamera} aria-label="カメラを停止"><CameraStopIcon /></button> : null}
@@ -1085,33 +1082,30 @@ function App() {
                 <label className="capture-field"><span>撮影セッションID</span><input value={captureSessionId} onChange={(event) => setCaptureSessionId(event.currentTarget.value)} maxLength={64} disabled={captureRows.length > 0} /></label>
                 <label className="capture-field"><span>魚ID（同じ魚は同じID）</span><input value={captureFishId} onChange={(event) => setCaptureFishId(event.currentTarget.value)} maxLength={64} /></label>
                 <label className="capture-field"><span>魚種</span><input value={chosenFish} readOnly /></label>
-                <label className="capture-field"><span>確認した工程</span><select value={captureStage} onChange={(event) => { setCaptureStage(event.currentTarget.value as CaptureStage); setCaptureReviewed(false); }}>
+                <label className="capture-field"><span>確認した工程</span><select value={captureStage} onChange={(event) => { setCaptureStage(event.currentTarget.value as CaptureStage);  }}>
                   <option value="unknown">未確認</option><option value="whole">未処理</option><option value="head_removed">頭を外した</option><option value="gutted">内臓処理済み</option><option value="filleting">身を分けている途中</option><option value="finished">工程完了</option><option value="other">その他</option>
                 </select></label>
-                <label className="capture-field"><span>頭の状態{captureHeadStatusSource === "ai_suggestion" ? " · AI仮入力" : ""}</span><select value={captureHeadStatus} onChange={(event) => { setCaptureHeadStatus(event.currentTarget.value as PartVisibility); setCaptureHeadStatusSource("manual"); setCaptureReviewed(false); }}>
+                <label className="capture-field"><span>頭の状態{captureHeadStatusSource === "ai_suggestion" ? " · AI仮入力" : ""}</span><select value={captureHeadStatus} onChange={(event) => { setCaptureHeadStatus(event.currentTarget.value as PartVisibility); setCaptureHeadStatusSource("manual");  }}>
                   <option value="unknown">未確認</option><option value="present_visible">付いている・見える</option><option value="removed_confirmed">切除済みと確認</option><option value="occluded">遮蔽されている</option><option value="out_of_frame">画角外</option>
                 </select></label>
-                <label className="capture-field"><span>尾の状態{captureTailStatusSource === "ai_suggestion" ? " · AI仮入力" : ""}</span><select value={captureTailStatus} onChange={(event) => { setCaptureTailStatus(event.currentTarget.value as PartVisibility); setCaptureTailStatusSource("manual"); setCaptureReviewed(false); }}>
+                <label className="capture-field"><span>尾の状態{captureTailStatusSource === "ai_suggestion" ? " · AI仮入力" : ""}</span><select value={captureTailStatus} onChange={(event) => { setCaptureTailStatus(event.currentTarget.value as PartVisibility); setCaptureTailStatusSource("manual");  }}>
                   <option value="unknown">未確認</option><option value="present_visible">付いている・見える</option><option value="removed_confirmed">切除済みと確認</option><option value="occluded">遮蔽されている</option><option value="out_of_frame">画角外</option>
                 </select></label>
-                <label className="capture-field"><span>遮蔽の主な理由</span><select value={captureOcclusion} onChange={(event) => { setCaptureOcclusion(event.currentTarget.value); setCaptureReviewed(false); }}>
+                <label className="capture-field"><span>遮蔽の主な理由</span><select value={captureOcclusion} onChange={(event) => { setCaptureOcclusion(event.currentTarget.value);  }}>
                   <option value="unknown">不明</option><option value="none">なし</option><option value="hands">手</option><option value="knife">包丁</option><option value="container">容器・器具</option><option value="overlap">魚や物との重なり</option><option value="other">その他</option>
                 </select></label>
-                <label className="capture-field"><span>カメラ角度</span><select value={captureCameraView} onChange={(event) => { setCaptureCameraView(event.currentTarget.value); setCaptureReviewed(false); }}>
+                <label className="capture-field"><span>カメラ角度</span><select value={captureCameraView} onChange={(event) => { setCaptureCameraView(event.currentTarget.value);  }}>
                   <option value="unknown">不明</option><option value="overhead">真上</option><option value="oblique">斜め上</option><option value="side">横</option><option value="other">その他</option>
                 </select></label>
-                <label className="capture-field"><span>照明</span><select value={captureLighting} onChange={(event) => { setCaptureLighting(event.currentTarget.value); setCaptureReviewed(false); }}>
+                <label className="capture-field"><span>照明</span><select value={captureLighting} onChange={(event) => { setCaptureLighting(event.currentTarget.value);  }}>
                   <option value="unknown">不明</option><option value="daylight">自然光</option><option value="indoor-led">室内LED</option><option value="dim">暗め</option><option value="other">その他</option>
                 </select></label>
-                <label className="capture-field"><span>端末機種（任意）</span><input value={captureDeviceModel} onChange={(event) => { setCaptureDeviceModel(event.currentTarget.value); setCaptureReviewed(false); }} maxLength={120} placeholder="不明（任意）" /></label>
+                <label className="capture-field"><span>端末機種（任意）</span><input value={captureDeviceModel} onChange={(event) => { setCaptureDeviceModel(event.currentTarget.value);  }} maxLength={120} placeholder="不明（任意）" /></label>
               </div>
 
-              <div className="capture-checks">
-                <label><input type="checkbox" checked={captureReviewed} onChange={(event) => setCaptureReviewed(event.currentTarget.checked)} />このラベルを見直した</label>
-              </div>
               <div className="capture-field-grid capture-presence-grid">
-                <label className="capture-field"><span>手の映り込み</span><select value={captureHandsVisible} onChange={(event) => { setCaptureHandsVisible(event.currentTarget.value as PresenceStatus); setCaptureReviewed(false); }}><option value="unknown">不明</option><option value="true">映っている</option><option value="false">映っていない</option></select></label>
-                <label className="capture-field"><span>包丁の映り込み</span><select value={captureKnifeVisible} onChange={(event) => { setCaptureKnifeVisible(event.currentTarget.value as PresenceStatus); setCaptureReviewed(false); }}><option value="unknown">不明</option><option value="true">映っている</option><option value="false">映っていない</option></select></label>
+                <label className="capture-field"><span>手の映り込み</span><select value={captureHandsVisible} onChange={(event) => { setCaptureHandsVisible(event.currentTarget.value as PresenceStatus);  }}><option value="unknown">不明</option><option value="true">映っている</option><option value="false">映っていない</option></select></label>
+                <label className="capture-field"><span>包丁の映り込み</span><select value={captureKnifeVisible} onChange={(event) => { setCaptureKnifeVisible(event.currentTarget.value as PresenceStatus);  }}><option value="unknown">不明</option><option value="true">映っている</option><option value="false">映っていない</option></select></label>
               </div>
               <label className="capture-field"><span>メモ（任意）</span><textarea value={captureNotes} onChange={(event) => setCaptureNotes(event.currentTarget.value)} maxLength={500} rows={2} placeholder="反射、画角、作業中など" /></label>
               <p className="capture-label-hint">頭や尾が映らないだけでは「切除済み」にしないでください。隠れている場合は「遮蔽」、画面外なら「画角外」、判断できなければ「未確認」を選びます。</p>
