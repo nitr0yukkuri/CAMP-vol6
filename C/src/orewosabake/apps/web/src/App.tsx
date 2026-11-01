@@ -936,7 +936,7 @@ function App() {
           <header className="hero">
             <div className="hero-copy">
               <h1>俺を捌け！</h1>
-              <p className="hero-intro">魚を選び、カメラの横で手順を確認</p>
+              <p className="hero-intro">魚を選んで、手順を見よう</p>
             </div>
             <HelpButton onClick={() => setHelpOpen(true)} />
             <div className="hero-fish-visual" key={selectedFish} aria-live="polite">
