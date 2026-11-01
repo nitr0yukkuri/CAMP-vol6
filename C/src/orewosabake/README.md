@@ -50,6 +50,37 @@ Cloudflareアカウントにログインする前に一時プレビューを作�
 
 デプロイ前に、無視対象の学習済みモデルがローカルにあり、TFLite形式のヘッダーを持ち、単一アセット上限未満であることを確認します。新しいチェックアウトでは [ml/README.md](ml/README.md) の学習手順を実行してモデルを用意してください。
 
+### GitHub Actionsで自動デプロイ
+
+`.github/workflows/cloudflare-deploy.yml` は、`main` にアプリの実行コードやビルド設定が反映されたときに、型チェックとビルドを行ってCloudflare Workersへデプロイします。PRを `main` にマージした場合も、`main` へのpushとして実行されます。撮影データや説明文だけの変更ではデプロイしません。同時に複数の更新が入った場合は、本番デプロイを並列実行しません。準備完了後はGitHub Actions画面から `main` ブランチを選んで手動再実行することもできます。
+
+GitHubリポジトリの **Settings → Secrets and variables → Actions** に、次のRepository secretsを登録してください。
+
+| Secret | 値 |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | 対象アカウントだけに範囲を絞ったWorkers編集用APIトークン |
+| `CLOUDFLARE_ACCOUNT_ID` | デプロイ先CloudflareアカウントのID |
+
+APIトークンはCloudflareの「Edit Cloudflare Workers」権限を選び、対象アカウントに限定してください。トークンをソースコードやGitHub Actionsのログに書かないでください。
+アカウントIDとAPIトークンの作成方法は[Cloudflare公式のGitHub Actions手順](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)を参照してください。
+
+**モデルの受け渡しも必要です。** `head-tail.tflite` はGit管理対象外なので、ワークフローは同じGitHubリポジトリのReleaseから取得し、登録されたSHA-256と照合します。Releaseを作成し、`head-tail.tflite` という名前でモデルを添付したうえで、GitHubの **Settings → Secrets and variables → Actions → Variables** に次を登録してください。
+
+| Variable | 値 |
+| --- | --- |
+| `HEAD_TAIL_MODEL_RELEASE_TAG` | モデルを添付したGitHub Releaseのタグ名（英数字、ピリオド、ハイフン、アンダースコア） |
+| `HEAD_TAIL_MODEL_SHA256` | 添付モデルの64桁SHA-256 |
+
+Windowsでは、モデルのSHA-256を次のコマンドで確認できます。
+
+```powershell
+Get-FileHash .\apps\web\public\models\head-tail.tflite -Algorithm SHA256
+```
+
+Releaseアセットのチェックサムが一致しない場合、TFLite形式でない場合、または25 MiB以上の場合は公開を止めます。モデルはサイトから配信される公開アセットなので、Releaseにも公開されます。GitHub Secretにモデル本体を入れる必要はありません。
+
+工程判定用モデルは別途任意の魚種別ファイルです。未配置でも頭・尾のモデルがあればサイトを公開でき、画面は工程判定を利用不可として扱います。
+
 ## API
 
 `apps/api` はNode.js標準HTTPサーバーで、魚種別の参考手順とメモリ内の進行セッションを提供します。開発時の既定アドレスは `http://127.0.0.1:3001` です（`PORT` と `HOST` で変更できます）。

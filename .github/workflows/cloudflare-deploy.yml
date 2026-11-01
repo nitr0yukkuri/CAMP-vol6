@@ -1,0 +1,93 @@
+name: Cloudflare Workers 本番デプロイ
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/cloudflare-deploy.yml
+      - C/src/orewosabake/apps/web/**
+      - C/src/orewosabake/packages/contracts/**
+      - C/src/orewosabake/package.json
+      - C/src/orewosabake/package-lock.json
+      - C/src/orewosabake/.npmrc
+      - C/src/orewosabake/.nvmrc
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-workers-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: 検証してCloudflareへ公開
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Cloudflare認証情報を確認
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [[ -z "$CLOUDFLARE_API_TOKEN" ]]; then
+            echo "::error title=Cloudflare API Tokenが未設定::Repository Actions secretsにCLOUDFLARE_API_TOKENを登録してください。"
+            exit 1
+          fi
+          if [[ -z "$CLOUDFLARE_ACCOUNT_ID" ]]; then
+            echo "::error title=Cloudflare Account IDが未設定::Repository Actions secretsにCLOUDFLARE_ACCOUNT_IDを登録してください。"
+            exit 1
+          fi
+
+      - name: リポジトリを取得
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: 学習済みモデルを取得して検証
+        working-directory: C/src/orewosabake
+        env:
+          MODEL_RELEASE_TAG: ${{ vars.HEAD_TAIL_MODEL_RELEASE_TAG }}
+          MODEL_SHA256: ${{ vars.HEAD_TAIL_MODEL_SHA256 }}
+        run: |
+          if [[ ! "$MODEL_RELEASE_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+            echo "::error title=モデルの保管先が未設定::Repository Actions variablesにHEAD_TAIL_MODEL_RELEASE_TAGを設定してください。"
+            exit 1
+          fi
+          if [[ ! "$MODEL_SHA256" =~ ^[A-Fa-f0-9]{64}$ ]]; then
+            echo "::error title=モデルのチェックサムが未設定::Repository Actions variablesにHEAD_TAIL_MODEL_SHA256を設定してください。"
+            exit 1
+          fi
+
+          model_path="apps/web/public/models/head-tail.tflite"
+          model_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${MODEL_RELEASE_TAG}/head-tail.tflite"
+          mkdir -p "$(dirname "$model_path")"
+          curl --fail --location --silent --show-error --retry 3 --retry-delay 2 --max-time 180 --max-filesize 26214399 "$model_url" --output "$model_path"
+          if ! printf '%s  %s\n' "$MODEL_SHA256" "$model_path" | sha256sum --check --status; then
+            rm -f "$model_path"
+            echo "::error title=モデルのチェックサムが不一致::Releaseのhead-tail.tfliteとHEAD_TAIL_MODEL_SHA256を確認してください。"
+            exit 1
+          fi
+
+      - name: Node.jsを設定
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: C/src/orewosabake/.nvmrc
+          cache: npm
+          cache-dependency-path: C/src/orewosabake/package-lock.json
+
+      - name: 依存関係を復元
+        working-directory: C/src/orewosabake
+        run: npm ci
+
+      - name: ビルドしてCloudflareへデプロイ
+        working-directory: C/src/orewosabake
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy:cloudflare
