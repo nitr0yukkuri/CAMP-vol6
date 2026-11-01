@@ -5,13 +5,20 @@ import {
 } from "@mediapipe/tasks-vision";
 import { ObservationSchema, type Observation } from "@orewosabake/contracts";
 
-const MEDIAPIPE_WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.0/wasm";
+const DEFAULT_MEDIAPIPE_WASM_PATH = "/mediapipe/wasm";
+const DETECTION_SCORE_THRESHOLD = 0.35;
+const DETECTION_MAX_RESULTS = 12;
 
 function clampRatio(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-function toObservation(result: ObjectDetectorResult, width: number, height: number): Observation {
+function toObservation(
+  result: ObjectDetectorResult,
+  width: number,
+  height: number,
+  capturedAt: string,
+): Observation {
   const detections = result.detections.flatMap((detection) => {
     const category = detection.categories[0];
     const label = category?.categoryName?.toLowerCase();
@@ -40,7 +47,7 @@ function toObservation(result: ObjectDetectorResult, width: number, height: numb
 
   return ObservationSchema.parse({
     source: "mediapipe",
-    capturedAt: new Date().toISOString(),
+    capturedAt,
     detections,
   });
 }
@@ -50,27 +57,27 @@ export class MediaPipeHeadTailDetector {
 
   private constructor(private readonly detector: ObjectDetector) {}
 
-  static async create(modelPath = "/models/head-tail.tflite"): Promise<MediaPipeHeadTailDetector> {
-    const wasmFiles = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_URL);
+  static async create(
+    modelPath = "/models/head-tail.tflite",
+    wasmPath = DEFAULT_MEDIAPIPE_WASM_PATH,
+  ): Promise<MediaPipeHeadTailDetector> {
+    const wasmFiles = await FilesetResolver.forVisionTasks(wasmPath);
     const detector = await ObjectDetector.createFromOptions(wasmFiles, {
       baseOptions: { modelAssetPath: modelPath },
       runningMode: "VIDEO",
-      maxResults: 12,
+      maxResults: DETECTION_MAX_RESULTS,
+      scoreThreshold: DETECTION_SCORE_THRESHOLD,
       categoryAllowlist: ["head", "tail"],
     });
 
     return new MediaPipeHeadTailDetector(detector);
   }
 
-  detectVideoFrame(video: HTMLVideoElement, timestampMs: number): Observation {
-    if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-      throw new Error("Video frame is not ready");
-    }
-
+  detectBitmapFrame(bitmap: ImageBitmap, timestampMs: number, capturedAt: string): Observation {
     const monotonicTimestamp = Math.max(timestampMs, this.lastTimestampMs + 1);
-    const result = this.detector.detectForVideo(video, monotonicTimestamp);
+    const result = this.detector.detectForVideo(bitmap, monotonicTimestamp);
     this.lastTimestampMs = monotonicTimestamp;
-    return toObservation(result, video.videoWidth, video.videoHeight);
+    return toObservation(result, bitmap.width, bitmap.height, capturedAt);
   }
 
   close(): void {

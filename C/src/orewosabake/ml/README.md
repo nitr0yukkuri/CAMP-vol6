@@ -14,7 +14,7 @@ MediaPipe Tasks Vision is the on-device inference runtime; it does not learn fis
 
 ## Split and leakage analysis
 
-The source archive's `Training` and `Testing` folders share seven capture dates. Filenames also show training and test images taken in the same short time windows on several of those dates. A plain evaluation on its original 40-image test folder could therefore reward recognition of the same capture setup or near-identical sequence.
+The source archive's `Training` and `Testing` folders share seven capture dates. Filenames also show training and test images taken in the same short time windows on several of those dates. A plain evaluation on its original 40-image test folder could therefore reward recognition of the same capture setup or near-identical sequence. Grouping by date avoids that direct overlap, but the source provides no fish-ID or recording-session labels; repeated views of the same individual across dates cannot be ruled out.
 
 `train_detector.py` combines both source folders and holds out full dates instead:
 
@@ -49,11 +49,29 @@ python ml/analyze_hog_predictions.py
 
 Model and analysis artifacts are written under ignored `ml/generated/head-tail-hog/`. The model is a small `.npz` linear classifier; the MediaPipe adapter does not load it.
 
-An attempt to install CPU PyTorch for YOLO training ran out of disk space. The computer had about 138 MB free at the time, and no supported Python 3.10 environment for the older Model Maker route. `nvidia-smi` was not available, so GPU availability was not verified; this experiment used CPU. No deep detector or TFLite model was produced. The HOG baseline is a useful low-cost experiment while that environment is unavailable, but it does not replace the full-frame detector described below.
+An earlier attempt to install CPU PyTorch for YOLO training ran out of disk space. The MediaPipe Model Maker experiment below instead uses an isolated Python 3.10 environment in WSL, stored under the Linux home directory; training and converted data remain in ignored project output. `nvidia-smi` was unavailable, so this run uses CPU. The HOG baseline remains a separate crop-classification baseline and does not replace the full-frame detector.
 
+## Trained full-frame detector
+
+The 30-epoch MobileNetV2 I320 model exported successfully and loaded through MediaPipe Tasks Vision `ObjectDetector`. The confidence threshold is `0.35` (selected on the validation split by macro F1 at IoU 0.5). Evaluation now uses the same `maxResults=12` cap as the browser adapter.
+
+| Capture-day-held-out split | Images | head P / R / F1 | tail P / R / F1 | Macro F1 |
+| --- | ---: | ---: | ---: | ---: |
+| Validation, 2019-10-14 | 21 | 0.909 / 0.952 / 0.930 | 0.800 / 0.762 / 0.781 | 0.855 |
+| Test, 2019-11-14 | 26 | 0.944 / 0.810 / 0.872 | 0.839 / 0.644 / 0.729 | 0.800 |
+
+With the browser's 12-result cap, the held-out test result has custom COCO-style AP50 `0.7943` and AP50:95 `0.4720`. Matching uses same-class boxes at IoU 0.5; AP uses 101-point interpolation. With a diagnostic cap of 100, AP50 is `0.8125`, while thresholded macro F1 stays `0.8002` at both caps. This shows that the cap removes some low-score detections used by AP but did not change detections above the selected `0.35` threshold on this test set. The standard Model Maker evaluator reported AP50 `0.815`, close to the uncapped custom result.
+
+The per-image error analysis finds 26 missed tail boxes: 13 are mainly localization errors (best same-class IoU below 0.5), 11 have an overlapping candidate below the score threshold, and 2 have no overlapping same-class candidate. Head misses include 5 likely head/tail confusions. These counts describe only 26 images from one held-out capture day. The dataset has no fish IDs or session labels, so they are not 26 confirmed independent fish; they do not predict accuracy on a phone or kitchen setup. The detailed threshold sweep, image-level false positives/negatives, environment versions, data-label checksums, and model SHA-256 are in ignored `ml/generated/output/metrics.json`. The 18 highest-error frames with ground-truth and predicted boxes are in ignored [error-analysis.png](generated/output/error-analysis.png).
+
+The exported float32 model is 10,457,546 bytes (about 10.0 MiB), with SHA-256 `17b0356cf1b14c3956627be109faa2d0ada73a916397d88ed32d6c96eb78ced6`. It is copied to `apps/web/public/models/head-tail.tflite`, which is ignored by Git. A Vite build on a machine with that file includes it as a static asset; a clean checkout or CI without it does not. It is under Cloudflare Workers' [25 MiB per-static-asset limit](https://developers.cloudflare.com/workers/platform/limits/). The browser samples video at 1 Hz. The latest WSL CPU/XNNPACK measurement, including image decode, was median `70.06 ms` and p95 `81.91 ms` across 26 images; this local benchmark varies by machine and is not a browser or phone measurement.
+
+## Source data
+
+The raw Mendeley archive and extracted images are intentionally excluded from Git. Follow [data/raw/README.md](../data/raw/README.md) to download version 1 and extract it under data/raw/mendeley-head-tail/extracted/. The conversion expects Training/ and Testing/ directly under that folder, with one matching YOLO .txt file for every .jpg image. A clean checkout must obtain this source data before running conversion or training.
 ## Prepare or train
 
-The current desktop has Python 3.12 and 3.14, while the last published Model Maker package lists Python 3.8–3.10. The data-conversion-only mode works with the bundled Python and Pillow:
+The last published Model Maker package lists Python 3.8–3.10; the current Windows Python is newer. Data conversion alone works with a Python environment that has Pillow:
 
 ```powershell
 python ml/train_detector.py --prepare-only --force
@@ -61,21 +79,38 @@ python ml/train_detector.py --prepare-only --force
 
 It creates the converted COCO images/labels under ignored `ml/generated/coco/`, plus `split-manifest.json` and `prepare-summary.json`. `--force` only replaces that generated COCO conversion.
 
-For the training experiment, use a Python 3.10 environment:
+Phone-capture data has a separate preparation path; it never overwrites the public Mendeley conversion or silently joins a training run. Follow [the capture and review procedure](../data/phone-capture/README.md), first generate a grouped split template, then edit and pass the split map:
 
 ```powershell
-py -3.10 -m venv ml/.venv
-ml/.venv/Scripts/python.exe -m pip install -r ml/requirements-model-maker.txt
-ml/.venv/Scripts/python.exe ml/train_detector.py --force
+python ml/prepare_phone_capture.py --manifest "D:\fish-pilot\capture-manifest.csv" --images-dir "D:\fish-pilot" --output ml/generated/phone-capture/split-plan --write-split-template
+python ml/prepare_phone_capture.py --manifest "D:\fish-pilot\capture-manifest.csv" --images-dir "D:\fish-pilot" --output ml/generated/phone-capture/converted --split-map ml/generated/phone-capture/split-plan/group-split-template.csv
 ```
 
-The model and metrics are written to ignored `ml/generated/output/`. Model Maker uses transfer learning and COCO evaluation metrics; the script reports validation and group-held-out test metrics separately. No QAT or aggressive quantization is included in this first run, so the float32 exported artifact can be checked for compatibility first.
+The phone-data converter joins rows that share either a `fish_id` or a `session_id`, and requires each resulting group to appear in exactly one of train/validation/test. It admits only human-reviewed status labels and manual boxes for visible parts; uncertain visibility or AI-only boxes are excluded. All three splits need images and positive examples of both classes. These guardrails prevent a small pilot from producing a misleading held-out score. The converter prepares COCO data only. Training on that data and reporting its results remain pending until distinct reviewed groups have been collected.
+
+When those groups exist, run the model commands from the WSL Python 3.10 environment created by `ml/setup-wsl-training.sh`. First measure the current Mendeley model against the phone validation/test sets at its current threshold without changing the app model. Then train and evaluate a phone-set model:
+
+```bash
+model_maker_python="${XDG_DATA_HOME:-$HOME/.local/share}/orewosabake/model-maker/venv/bin/python"
+"$model_maker_python" ml/train_detector.py --generated ml/generated/phone-capture/converted --evaluate-only --model ml/generated/output/head-tail.tflite --score-threshold 0.35 --no-copy-web-model
+"$model_maker_python" ml/train_detector.py --generated ml/generated/phone-capture/converted --prepared-only
+```
+
+The first command keeps the existing threshold fixed to reveal the domain gap. The second uses the grouped phone train/validation/test data and copies the newly trained model into `apps/web/public/models/head-tail.tflite` after compatibility evaluation. This replaces the model file in the current checkout; keep the first report so you can compare it. Treat the test metrics as the final held-out result; do not use its errors to change labels, thresholds, or training choices and then report the same test again.
+
+For training, use Ubuntu on WSL. From the project directory in WSL, prepare the isolated Python 3.10 environment and pinned dependencies:
+
+```bash
+bash ml/setup-wsl-training.sh
+```
+
+The script prints the exact command to train. The pinned dependencies resolve the Python/Windows TensorFlow Text conflict and MediaPipe metadata package incompatibilities seen with newer releases. Training takes place on CPU. Model Maker uses transfer learning and COCO evaluation metrics; validation and capture-day-held-out test metrics are reported separately. The exported float32 TFLite file is also loaded and run through MediaPipe Tasks before it is copied to the web public model path. `--evaluate-only` repeats the compatibility check, selects a score threshold by validation macro F1 at IoU 0.5 using the browser's 12-result cap, compares with a 100-result diagnostic cap, and reports per-class metrics and image-level failure causes on the independent held-out test split without training again. It also creates a box-overlay montage for the highest-error frames. Generated datasets, checkpoints, metrics, the montage, and the model file are ignored by Git.
 
 ## Browser model adapter
 
-After training and compatibility review, copy `ml/generated/output/head-tail.tflite` to `apps/web/public/models/head-tail.tflite`. The browser adapter loads that file as a MediaPipe Tasks Vision Object Detector and accepts decoded video frames. The UI remains in mock mode until a model and camera lifecycle are intentionally connected.
+The web client checks for `apps/web/public/models/head-tail.tflite` when the camera starts and loads it through MediaPipe Tasks Vision `ObjectDetector` in `VIDEO` mode inside a dedicated Web Worker. It samples the local camera about once per second, scales each frame proportionally to a maximum dimension of 832 pixels (matching the source image size), transfers one `ImageBitmap` at a time to that worker, and terminates the worker when the camera/guide is stopped. The MediaPipe WASM files come from the lockfile-pinned npm package and are copied into the ignored public directory before dev/build, then served from the same origin as the app. This removes the runtime CDN dependency. Frames stay inside the browser and are not sent to the API or an external service. The result is schema-validated when it crosses back to the React thread, and old results are discarded. The guide's manual session remains independent of detections, and a missing head/tail detection is not treated as evidence that a part was removed.
 
-MediaPipe's web `detectForVideo()` call is synchronous and can block the main thread. The product design samples frames around once or twice per second, allows one inference at a time, and should move inference to a worker only if measurements show the main thread is blocked. The adapter does not request camera permission, upload frames, or control guide progression.
+MediaPipe's web `detectForVideo()` call is synchronous, so it runs in the worker to keep the React thread responsive. The current cadence is 1 Hz with at most one frame in flight. Phone-specific latency and camera compatibility still need measurement.
 
 ## What the experiment cannot answer
 
@@ -88,6 +123,7 @@ Stage recognition needs phone-view frames with confirmed stage labels, explicit 
 
 ## Official references
 
+- Training source: Eko Prasetyo, Nanik Suciati, and Chastine Fatichah, [Dataset for Detecting Head and Tail of Fish](https://data.mendeley.com/datasets/7m2yzmpcft/1), v1 (2021), DOI `10.17632/7m2yzmpcft.1`, CC BY 4.0. If distributing the trained model, preserve attribution to the dataset and identify the model as trained/adapted from it; check the dataset page for its current terms.
 - [MediaPipe Model Maker status and limitations](https://developers.google.com/edge/mediapipe/solutions/model_maker)
 - [MediaPipe Object Detector customization and TFLite export](https://developers.google.com/edge/mediapipe/solutions/customization/object_detector)
 - [MediaPipe Tasks Object Detector web guide and model requirements](https://developers.google.com/edge/mediapipe/solutions/vision/object_detector/web_js)

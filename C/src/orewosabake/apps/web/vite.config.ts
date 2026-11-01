@@ -1,12 +1,9 @@
 import { defineConfig } from "vite";
+import { cloudflare } from "@cloudflare/vite-plugin";
 
 export default defineConfig({
-  server: {
-    proxy: {
-      "/api": {
-        target: process.env.API_PROXY_TARGET ?? "http://127.0.0.1:3001",
-        changeOrigin: true,
-      },
-    },
+  plugins: [cloudflare({ viteEnvironment: { name: "worker" } })],
+  environments: {
+    worker: { build: { sourcemap: true } },
   },
 });
