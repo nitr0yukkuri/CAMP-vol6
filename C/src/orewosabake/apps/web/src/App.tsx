@@ -136,7 +136,7 @@ function downloadCaptureFile(blob: Blob, filename: string): void {
 }
 
 function fishImage(fish: Fish): string {
-  return `/fish-mascots-transparent/${fish.mascot}.png`;
+  return `/fish-mascots-transparent-clean/${fish.mascot}.png`;
 }
 
 function fishImageClass(baseClass: string): string {
