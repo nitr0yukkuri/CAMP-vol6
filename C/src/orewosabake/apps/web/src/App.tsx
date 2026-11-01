@@ -852,12 +852,18 @@ function App() {
                   onClick={() => setSelectedFish("その他")}
                   aria-pressed={selectedFish === "その他"}
                 >
-                  <strong>その他の魚</strong>
+                  <span className="fish-card-image-frame" aria-hidden="true">
+                    <FishMark />
+                  </span>
+                  <div className="fish-card-copy"><strong>その他の魚</strong></div>
                 </button>
               ) : null}
               {matchingFish.length === 0 && search ? (
                 <button type="button" className={`fish-card fish-card--other${selectedFish === "その他" ? " is-selected" : ""}`} onClick={() => setSelectedFish("その他")} aria-pressed={selectedFish === "その他"}>
-                  <strong>「{search}」で進む</strong>
+                  <span className="fish-card-image-frame" aria-hidden="true">
+                    <FishMark />
+                  </span>
+                  <div className="fish-card-copy"><strong>「{search}」で進む</strong></div>
                 </button>
               ) : null}
               {matchingFish.length === 0 && !search ? <p className="empty-fish">このカテゴリの魚は準備中です。</p> : null}
