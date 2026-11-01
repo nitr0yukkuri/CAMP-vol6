@@ -336,10 +336,6 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
           </li>
         </ol>
 
-        <section className="help-limit">
-          <strong>AIについて</strong>
-          <p>試験AIが見るのは魚の頭・尾の位置だけです。切除済みか、工程が終わったか、安全に作業できているかは判定しません。工程は自動で進みません。</p>
-        </section>
         <p className="help-privacy-note">通常のガイドでは、カメラ映像は端末内で処理され、サーバーへ送られません。参考手順は公開資料の要約で、調理経験者の確認前です。「研究用データを撮る」は任意の検証機能で、撮影画像は端末に保存します。</p>
         <footer className="help-dialog-footer">
           <button type="button" onClick={() => dialogRef.current?.close()}>使い方が分かった</button>
