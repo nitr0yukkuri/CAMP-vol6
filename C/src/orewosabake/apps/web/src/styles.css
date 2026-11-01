@@ -285,7 +285,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .help-flow p, .help-limit p { margin: 3px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
 .help-limit { padding: 12px 14px; border-left: 3px solid var(--action); border-radius: 0 12px 12px 0; background: rgba(var(--action-rgb), .08); }
 .help-privacy-note { margin: -4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
-.help-dialog-footer { display: flex; justify-content: flex-end; padding-top: 1px; }
+.help-dialog-footer { display: flex; justify-content: center; padding-top: 1px; }
 .help-dialog-footer button { min-height: 42px; padding: 0 20px; border: 0; border-radius: 999px; color: var(--on-dark); background: var(--deep); font-size: 12px; font-weight: 800; cursor: pointer; }
 @keyframes help-pop { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
 
