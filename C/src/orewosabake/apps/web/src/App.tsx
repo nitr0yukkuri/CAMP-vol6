@@ -397,7 +397,8 @@ function App() {
 
   const chosenFish = selectedFish === "その他" ? search.trim() || "ほかの魚" : selectedFish;
   const selectedFishData = fishList.find((fish) => fish.name === selectedFish);
-  const selectedFishVisualData = selectedFishData ?? (selectedFish === "その他" ? fishList.find((fish) => fish.name === "マグロ") : undefined);
+  const genericFishVisualData = fishList.find((fish) => fish.name === "マグロ");
+  const selectedFishVisualData = selectedFishData ?? (selectedFish === "その他" ? genericFishVisualData : undefined);
   const selectedGuideFishId = resolveGuideFishId(chosenFish);
   const guide = guideSession?.guide;
   const isLastGuideStep = guide ? activeStep >= guide.steps.length - 1 : false;
@@ -905,7 +906,9 @@ function App() {
                   aria-pressed={selectedFish === "その他"}
                 >
                   <span className="fish-card-image-frame" aria-hidden="true">
-                    <FishMark />
+                    {genericFishVisualData ? (
+                      <img className={fishImageClass("fish-card-photo")} src={fishImage(genericFishVisualData)} alt="" loading="lazy" />
+                    ) : <FishMark />}
                   </span>
                   <div className="fish-card-copy"><strong>その他の魚</strong></div>
                 </button>
@@ -913,7 +916,9 @@ function App() {
               {matchingFish.length === 0 && search ? (
                 <button type="button" className={`fish-card fish-card--other${selectedFish === "その他" ? " is-selected" : ""}`} onClick={() => setSelectedFish("その他")} aria-pressed={selectedFish === "その他"}>
                   <span className="fish-card-image-frame" aria-hidden="true">
-                    <FishMark />
+                    {genericFishVisualData ? (
+                      <img className={fishImageClass("fish-card-photo")} src={fishImage(genericFishVisualData)} alt="" loading="lazy" />
+                    ) : <FishMark />}
                   </span>
                   <div className="fish-card-copy"><strong>「{search}」で進む</strong></div>
                 </button>
