@@ -852,7 +852,7 @@ function App() {
                   onClick={() => setSelectedFish("その他")}
                   aria-pressed={selectedFish === "その他"}
                 >
-                  <strong>ほかの魚を探す</strong>
+                  <strong>その他の魚</strong>
                 </button>
               ) : null}
               {matchingFish.length === 0 && search ? (
