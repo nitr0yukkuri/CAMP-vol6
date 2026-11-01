@@ -5,7 +5,9 @@ import {
   GuideContextRequestSchema,
   GuideRequestSchema,
   GuideSessionSchema,
-  MOCK_GUIDE,
+  getReferenceGuide,
+  resolveGuideFishId,
+  FishIdSchema,
   MOCK_MODEL_STATUS,
   MOCK_OBSERVATION,
   ORIENTATION_CONFIG,
@@ -32,7 +34,8 @@ class RequestError extends Error {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
-    const { pathname } = new URL(request.url);
+    const url = new URL(request.url);
+    const { pathname } = url;
 
     const sessionMatch = pathname.match(/^\/api\/guide\/sessions\/([0-9a-f-]{36})$/i);
     const advanceMatch = pathname.match(/^\/api\/guide\/sessions\/([0-9a-f-]{36})\/advance$/i);
@@ -47,7 +50,13 @@ export default {
       const contextRequest = GuideContextRequestSchema.safeParse(body);
       const catalogRequest = GuideRequestSchema.safeParse(body);
       if (!contextRequest.success && !catalogRequest.success) return validationError();
-      return errorResponse(503, "GUIDE_NOT_CONFIGURED", "対応する手順がまだ登録されていません。");
+      const fishId = contextRequest.success
+        ? resolveGuideFishId(contextRequest.data.fishName)
+        : catalogRequest.success ? catalogRequest.data.fishId : undefined;
+      const guide = fishId ? getReferenceGuide(fishId) : undefined;
+      return guide
+        ? json(guide)
+        : errorResponse(404, "GUIDE_NOT_AVAILABLE", "この魚の参考手順はまだ登録されていません。");
     }
 
     if (request.method === "GET") {
@@ -56,8 +65,14 @@ export default {
           return json({ status: "ok", service: "orewosabake-api" });
         case "/api/catalog":
           return json(CATALOG);
-        case "/api/guide":
-          return json(MOCK_GUIDE);
+        case "/api/guide": {
+          const fishId = FishIdSchema.safeParse(url.searchParams.get("fishId"));
+          if (!fishId.success) return errorResponse(400, "FISH_REQUIRED", "fishIdで魚種を指定してください。");
+          const guide = getReferenceGuide(fishId.data);
+          return guide
+            ? json(guide)
+            : errorResponse(404, "GUIDE_NOT_AVAILABLE", "この魚の参考手順はまだ登録されていません。");
+        }
         case "/api/model/status":
           return json(MOCK_MODEL_STATUS);
         case "/api/config/orientation":
@@ -135,6 +150,8 @@ export class GuideSessionStore extends DurableObject<Env> {
         const body = await readRequestBody(request);
         const parsed = GuideRequestSchema.safeParse(body);
         if (!parsed.success) return validationError();
+        const guide = getReferenceGuide(parsed.data.fishId);
+        if (!guide) return errorResponse(404, "GUIDE_NOT_AVAILABLE", "この魚の参考手順はまだ登録されていません。");
 
         const now = Date.now();
         const clientHash = await hashClientAddress(request.headers.get("cf-connecting-ip") ?? "local-development");
@@ -186,7 +203,7 @@ export class GuideSessionStore extends DurableObject<Env> {
           return errorResponse(503, "SESSION_CAPACITY_REACHED", "保持中のガイドセッション数が上限に達しています。時間をおいて再試行してください。");
         }
 
-        const session = createMockSession(parsed.data.fishId, parsed.data.preparationId);
+        const session = createReferenceSession(parsed.data.fishId, parsed.data.preparationId, guide);
         this.storeSession(session);
         return json(session, 201);
       }
@@ -227,10 +244,10 @@ export class GuideSessionStore extends DurableObject<Env> {
         const nextStepIndex = session.currentStepIndex + 1;
         const nextSession = GuideSessionSchema.parse({
           ...session,
-          currentStep: MOCK_GUIDE.steps[nextStepIndex] ?? null,
+          currentStep: session.guide.steps[nextStepIndex] ?? null,
           currentStepIndex: nextStepIndex,
           completedStepIds,
-          status: nextStepIndex >= MOCK_GUIDE.steps.length ? "completed" : "active",
+          status: nextStepIndex >= session.guide.steps.length ? "completed" : "active",
           updatedAt: new Date().toISOString(),
         });
         this.storeSession(nextSession);
@@ -317,18 +334,18 @@ async function hashClientAddress(address: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function createMockSession(fishId: GuideSession["fishId"], preparationId: GuideSession["preparationId"]): GuideSession {
+function createReferenceSession(fishId: GuideSession["fishId"], preparationId: GuideSession["preparationId"], guide: NonNullable<ReturnType<typeof getReferenceGuide>>): GuideSession {
   const now = new Date().toISOString();
   return GuideSessionSchema.parse({
     sessionId: crypto.randomUUID(),
     fishId,
     preparationId,
-    guide: MOCK_GUIDE,
-    currentStep: MOCK_GUIDE.steps[0],
+    guide,
+    currentStep: guide.steps[0],
     currentStepIndex: 0,
     completedStepIds: [],
     status: "active",
-    source: "mock",
+    source: "public_reference",
     createdAt: now,
     updatedAt: now,
   });

@@ -6,7 +6,9 @@ import {
   GuideContextRequestSchema,
   GuideRequestSchema,
   GuideSessionSchema,
-  MOCK_GUIDE,
+  FishIdSchema,
+  getReferenceGuide,
+  resolveGuideFishId,
   MOCK_MODEL_STATUS,
   MOCK_OBSERVATION,
   ORIENTATION_CONFIG,
@@ -81,18 +83,18 @@ async function readJsonBody(request: import("node:http").IncomingMessage): Promi
   }
 }
 
-function createMockSession(fishId: GuideSession["fishId"], preparationId: GuideSession["preparationId"]): GuideSession {
+function createReferenceSession(fishId: GuideSession["fishId"], preparationId: GuideSession["preparationId"], guide: NonNullable<ReturnType<typeof getReferenceGuide>>): GuideSession {
   const now = new Date().toISOString();
   return GuideSessionSchema.parse({
     sessionId: randomUUID(),
     fishId,
     preparationId,
-    guide: MOCK_GUIDE,
-    currentStep: MOCK_GUIDE.steps[0],
+    guide,
+    currentStep: guide.steps[0],
     currentStepIndex: 0,
     completedStepIds: [],
     status: "active",
-    source: "mock",
+    source: "public_reference",
     createdAt: now,
     updatedAt: now,
   });
@@ -106,7 +108,7 @@ function validationDetails(issues: Array<{ code: string; path: PropertyKey[] }>)
       : field === "fishId"
         ? "魚種はカタログにある候補から選んでください。"
         : field === "preparationId"
-          ? "目的は「皮を取り除き、身だけを取り出す」を指定してください。"
+          ? "目的は「三枚おろし」を指定してください。"
           : field === "fishName"
             ? "魚の名前を入力してください。"
             : field === "fishCategory"
@@ -124,8 +126,10 @@ function validationDetails(issues: Array<{ code: string; path: PropertyKey[] }>)
 
 async function handleRequest(request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse) {
   let pathname: string;
+  let requestUrl: URL;
   try {
-    pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+    requestUrl = new URL(request.url ?? "/", "http://localhost");
+    pathname = requestUrl.pathname;
   } catch {
     sendError(response, 400, "BAD_REQUEST", "リクエストURLの形式が正しくありません。");
     return;
@@ -150,11 +154,16 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
       sendError(response, 422, "VALIDATION_ERROR", "入力内容に誤りがあります。", validationDetails(parsed.error.issues));
       return;
     }
+    const guide = getReferenceGuide(parsed.data.fishId);
+    if (!guide) {
+      sendError(response, 404, "GUIDE_NOT_AVAILABLE", "この魚の参考手順はまだ登録されていません。");
+      return;
+    }
     if (guideSessions.size >= MAX_GUIDE_SESSIONS) {
       sendError(response, 503, "SESSION_CAPACITY_REACHED", "保持中のガイドセッション数が上限に達しています。時間をおいて再試行してください。");
       return;
     }
-    const session = createMockSession(parsed.data.fishId, parsed.data.preparationId);
+    const session = createReferenceSession(parsed.data.fishId, parsed.data.preparationId, guide);
     guideSessions.set(session.sessionId, session);
     sendJson(response, 201, session);
     return;
@@ -207,10 +216,10 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
     const nextStepIndex = session.currentStepIndex + 1;
     const nextSession = GuideSessionSchema.parse({
       ...session,
-      currentStep: MOCK_GUIDE.steps[nextStepIndex] ?? null,
+      currentStep: session.guide.steps[nextStepIndex] ?? null,
       currentStepIndex: nextStepIndex,
       completedStepIds,
-      status: nextStepIndex >= MOCK_GUIDE.steps.length ? "completed" : "active",
+      status: nextStepIndex >= session.guide.steps.length ? "completed" : "active",
       updatedAt: new Date().toISOString(),
     });
     guideSessions.set(session.sessionId, nextSession);
@@ -239,7 +248,15 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
       return;
     }
 
-    sendError(response, 503, "GUIDE_NOT_CONFIGURED", "対応する手順がまだ登録されていません。");
+    const fishId = contextRequest.success
+      ? resolveGuideFishId(contextRequest.data.fishName)
+      : guideRequest.success ? guideRequest.data.fishId : undefined;
+    const guide = fishId ? getReferenceGuide(fishId) : undefined;
+    if (!guide) {
+      sendError(response, 404, "GUIDE_NOT_AVAILABLE", "この魚の参考手順はまだ登録されていません。");
+      return;
+    }
+    sendJson(response, 200, guide);
     return;
   }
 
@@ -278,9 +295,20 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
     case "/api/health":
       sendJson(response, 200, { status: "ok", service: "orewosabake-api" });
       return;
-    case "/api/guide":
-      sendJson(response, 200, MOCK_GUIDE);
+    case "/api/guide": {
+      const fishId = FishIdSchema.safeParse(requestUrl.searchParams.get("fishId"));
+      if (!fishId.success) {
+        sendError(response, 400, "FISH_REQUIRED", "fishIdで魚種を指定してください。");
+        return;
+      }
+      const guide = getReferenceGuide(fishId.data);
+      if (!guide) {
+        sendError(response, 404, "GUIDE_NOT_AVAILABLE", "この魚の参考手順はまだ登録されていません。");
+        return;
+      }
+      sendJson(response, 200, guide);
       return;
+    }
     case "/api/catalog":
       sendJson(response, 200, CATALOG);
       return;
