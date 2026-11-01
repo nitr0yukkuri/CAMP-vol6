@@ -154,7 +154,7 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
       sendError(response, 422, "VALIDATION_ERROR", "入力内容に誤りがあります。", validationDetails(parsed.error.issues));
       return;
     }
-    const guide = getReferenceGuide(parsed.data.fishId);
+    const guide = getReferenceGuide(parsed.data.fishId, parsed.data.preparationId);
     if (!guide) {
       sendError(response, 404, "GUIDE_NOT_AVAILABLE", "この魚の参考手順はまだ登録されていません。");
       return;
@@ -249,9 +249,11 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
     }
 
     const fishId = contextRequest.success
-      ? resolveGuideFishId(contextRequest.data.fishName)
+      ? resolveGuideFishId(contextRequest.data.fishName) ?? "other_finfish"
       : guideRequest.success ? guideRequest.data.fishId : undefined;
-    const guide = fishId ? getReferenceGuide(fishId) : undefined;
+    const guide = fishId
+      ? getReferenceGuide(fishId, guideRequest.success ? guideRequest.data.preparationId : undefined)
+      : undefined;
     if (!guide) {
       sendError(response, 404, "GUIDE_NOT_AVAILABLE", "この魚の参考手順はまだ登録されていません。");
       return;

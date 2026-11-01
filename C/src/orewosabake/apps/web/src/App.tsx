@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { AdvanceGuideStepRequestSchema, getReferenceGuide, GuideRequestSchema, GuideSessionSchema, resolveGuideFishId, type GuideRequest, type GuideSession, type Observation } from "@orewosabake/contracts";
+import { AdvanceGuideStepRequestSchema, getPreparationIdForFish, getReferenceGuide, GuideRequestSchema, GuideSessionSchema, resolveGuideFishId, type GuideRequest, type GuideSession, type Observation } from "@orewosabake/contracts";
 import { useHeadTailDetection, type HeadTailDetectionStatus } from "./hooks/useHeadTailDetection";
 import { fishStageLabel, stageToExpectedFishState } from "./model/fishStage";
 
@@ -175,7 +175,7 @@ async function createGuideSession(requestBody: GuideRequest, signal: AbortSignal
 class GuideApiUnavailableError extends Error {}
 
 function createLocalGuideSession(requestBody: GuideRequest): GuideSession {
-  const guide = getReferenceGuide(requestBody.fishId);
+  const guide = getReferenceGuide(requestBody.fishId, requestBody.preparationId);
   if (!guide) throw new Error("No reference guide is registered for this fish");
   const now = new Date().toISOString();
   return GuideSessionSchema.parse({
@@ -240,6 +240,7 @@ function fishTeacherDialogue(step?: { id: string; title: string }) {
   if (!step) return "いっしょに確認しよう！";
   if (step.id === "hamachi_scales") return "よーし！うろこ取りだよ！体をぬらして、ヒレの近くもチェック！";
   if (step.id === "tai_scales") return "よーし！うろこ取りだよ！尾側から取って、ヒレの近くも見てね！";
+  if (step.id === "other_finfish_identify") return "まず魚の種類を確認しよう！迷ったらお店に聞いてね！";
   return `いい調子！「${step.title}」に挑戦だよ！`;
 }
 
@@ -332,7 +333,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
         <ol className="help-flow">
           <li>
             <span>1</span>
-            <div><strong>魚を選ぶ</strong><p>まずはアジ・ハマチ・サバ・タイのいずれかを選びます。その他の魚は、魚種別の手順がまだありません。</p></div>
+            <div><strong>魚を選ぶ</strong><p>一覧の21種類それぞれに合わせた参考手順を見られます。種類が分からない魚は、購入店に確認してね。</p></div>
           </li>
           <li>
             <span>2</span>
@@ -477,12 +478,14 @@ function App() {
     });
   }, [category, search]);
 
-  const chosenFish = selectedFish === "その他" ? search.trim() || "ほかの魚" : selectedFish;
+  const chosenFish = selectedFish === "その他" ? search.trim() || "その他の魚" : selectedFish;
   const selectedFishData = fishList.find((fish) => fish.name === selectedFish);
   const genericFishVisualData = fishList.find((fish) => fish.name === "マグロ");
   const selectedFishVisualData = selectedFishData ?? (selectedFish === "その他" ? genericFishVisualData : undefined);
-  const selectedGuideFishId = resolveGuideFishId(chosenFish);
-  const stageCaptureSupported = selectedGuideFishId !== undefined;
+  const knownGuideFishId = resolveGuideFishId(chosenFish);
+  const selectedGuideFishId = knownGuideFishId ?? (selectedFish === "その他" ? "other_finfish" : undefined);
+  const stageCaptureSupported = knownGuideFishId !== undefined
+    && ["aji", "saba", "tai", "hamachi"].includes(knownGuideFishId);
   const guide = guideSession?.guide;
   const isLastGuideStep = guide ? activeStep >= guide.steps.length - 1 : false;
   const guideIsComplete = guideSession?.status === "completed";
@@ -516,7 +519,10 @@ function App() {
     const selectedFishId = selectedGuideFishId;
     if (selectedFishId) {
       setGuideSessionLoading(true);
-      const guideRequest = GuideRequestSchema.parse({ fishId: selectedFishId, preparationId: "three_piece_fillet" });
+      const guideRequest = GuideRequestSchema.parse({
+        fishId: selectedFishId,
+        preparationId: getPreparationIdForFish(selectedFishId),
+      });
       void createGuideSession(guideRequest, guideController.signal).then((session) => {
         if (guideController.signal.aborted) return;
         setGuideSession(session);
@@ -1083,9 +1089,9 @@ function App() {
               {matchingFish.length === 0 && !search ? <p className="empty-fish">このカテゴリの魚は準備中です。</p> : null}
             </div>
 
-            <button className="start-button" type="button" disabled={!fishCanContinue} onClick={() => void startGuide()}>
+            <button className="start-button" type="button" onClick={() => void startGuide()}>
               <strong>俺を捌け！</strong>
-              <span>{selectedGuideFishId ? "この魚を捌く" : "この魚の手順は準備中"}</span>
+              <span>{selectedGuideFishId === "other_finfish" ? "基本の三枚おろしで進む" : selectedGuideFishId ? "この魚を捌く" : "この魚の手順は準備中"}</span>
             </button>
             <button className="capture-entry-button" type="button" disabled={!fishCanContinue} onClick={startCapture}>
               研究用データを撮る
@@ -1173,7 +1179,7 @@ function App() {
               <button className="capture-export-button" type="button" onClick={() => void saveStageCaptureFrame()} disabled={!stageCaptureSupported || cameraStatus !== "active" || captureBusy || captureRows.length >= MAX_CAPTURE_FRAMES || captureStage === "unknown" || captureStage === "other"}>
                 {captureBusy ? "保存中…" : "工程画像を保存（頭・尾の枠なし）"}
               </button>
-              <p className="capture-label-hint">{stageCaptureSupported ? "工程分類のデータを集める場合はこちら。画像と工程ラベルが一致するか保存前に確認し、ほかの項目は「不明」で記録します。" : "工程分類用のデータ収集はハマチ・アジ・サバ・タイが対象です。"}</p>
+              <p className="capture-label-hint">{stageCaptureSupported ? "工程分類のデータを集める場合はこちら。画像と工程ラベルが一致するか保存前に確認し、ほかの項目は「不明」で記録します。" : "工程分類用の撮影はハマチ・アジ・サバ・タイが対象です。魚種別ガイドは利用できます。"}</p>
               <div className="capture-field-grid capture-presence-grid">
                 <label className="capture-field"><span>手の映り込み</span><select value={captureHandsVisible} onChange={(event) => { setCaptureHandsVisible(event.currentTarget.value as PresenceStatus);  }}><option value="unknown">不明</option><option value="true">映っている</option><option value="false">映っていない</option></select></label>
                 <label className="capture-field"><span>包丁の映り込み</span><select value={captureKnifeVisible} onChange={(event) => { setCaptureKnifeVisible(event.currentTarget.value as PresenceStatus);  }}><option value="unknown">不明</option><option value="true">映っている</option><option value="false">映っていない</option></select></label>
