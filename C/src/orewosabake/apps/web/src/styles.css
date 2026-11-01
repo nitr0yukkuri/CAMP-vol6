@@ -166,9 +166,11 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .guide-step h2 { margin: 0 0 4px; color: var(--deep); font-size: 16px; letter-spacing: 0; }
 .guide-step p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .guide-step > .guide-message { margin-top: 4px; color: var(--notice); font-size: 9px; line-height: 1.35; }
-.guide-source { display: flex; min-width: 0; flex-direction: column; gap: 1px; margin-top: 4px; color: var(--muted); font-size: 7px; line-height: 1.25; }
-.guide-source span, .guide-source a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.guide-source { min-width: 0; margin-top: 4px; color: var(--muted); font-size: 9px; line-height: 1.3; }
+.guide-source summary { width: max-content; cursor: pointer; }
+.guide-source a, .guide-source small { display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .guide-source a { color: var(--deep-soft); text-decoration: underline; text-underline-offset: 2px; }
+.guide-source small { color: var(--muted); font-size: 8px; }
 .guide-status-label { color: var(--muted); font-size: 10px; font-weight: 700; text-align: right; }
 .guide-empty-state { display: flex; min-height: 52px; flex-direction: column; justify-content: center; }
 .observation-note { display: flex; min-width: 0; align-items: center; gap: 7px; margin: 0; padding: 7px 8px; border-radius: 9px; color: var(--success); background: var(--success-surface); }
