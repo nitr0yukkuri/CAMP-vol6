@@ -332,7 +332,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
           </li>
           <li>
             <span>3</span>
-            <div><strong>カメラを起動して、手順を読む</strong><p>カメラの使用を許可すると映像が表示されます。各手順を確認して、自分で「次の工程へ」を押します。</p></div>
+            <div><strong>カメラを起動して、手順を読む</strong><p>カメラの使用を許可すると映像が表示されます。各手順を確認して、自分で「次の工程へ」を押します。画面を閉じると進行はリセットされます。</p></div>
           </li>
         </ol>
 
@@ -524,7 +524,7 @@ function App() {
             setGuideSession(localSession);
             setGuideSessionMode("local");
             setActiveStep(localSession.currentStepIndex);
-            setGuideMessage("APIがないため、この画面を開いている間だけ端末内で進行します。工程をAIが判定する機能はありません。");
+            setGuideMessage("");
           } catch {
             setGuideMessage("魚種別の参考手順を準備できませんでした。魚を選び直してください。");
           }
@@ -1251,10 +1251,11 @@ function App() {
                     <h2>{currentStep.title}</h2>
                     <p>{currentStep.description}</p>
                     {guideSession?.guide.source === "public_reference" ? (
-                      <div className="guide-source">
-                        <span>{guideSessionMode === "local" ? "公開資料の要約・未レビュー · この画面内だけで進行" : guideSession.guide.expertReviewed ? "参考資料" : "公開資料の要約・専門家レビュー前"}</span>
-                        <a href={guideSession.guide.sourceUrl} target="_blank" rel="noreferrer">出典：{guideSession.guide.sourceLabel}</a>
-                      </div>
+                      <details className="guide-source">
+                        <summary>出典</summary>
+                        <a href={guideSession.guide.sourceUrl} target="_blank" rel="noreferrer">{guideSession.guide.sourceLabel}</a>
+                        {!guideSession.guide.expertReviewed ? <small>公開資料の要約です。専門家レビュー前です。</small> : null}
+                      </details>
                     ) : null}
                     {guideMessage ? <p className="guide-message" role="status">{guideMessage}</p> : null}
                   </div>
