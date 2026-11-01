@@ -74,8 +74,14 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .hero-eyebrow { margin: 0 0 11px; color: var(--gold); font-size: 12px; font-weight: 500; letter-spacing: 0; line-height: 1; }
 .hero h1 { margin: 0; color: var(--card); font-size: 28px; font-weight: 700; letter-spacing: 0; line-height: 1; }
 .hero-copy > p:last-child { margin: 13px 0 0; font-size: 13px; font-weight: 600; line-height: 1.6; }
+.hero-intro { max-width: 175px; color: rgba(255, 250, 242, .82); font-size: 11px !important; font-weight: 500 !important; line-height: 1.55 !important; }
+.help-trigger { display: grid; width: 36px; height: 36px; flex: 0 0 36px; padding: 0; place-items: center; border: 1px solid rgba(255, 250, 242, .48); border-radius: 50%; color: var(--deep); background: var(--card); box-shadow: 0 4px 12px rgba(0, 0, 0, .12); cursor: pointer; transition: transform .15s ease, background .15s ease; }
+.help-trigger:hover { transform: translateY(-1px); background: #fff; }
+.help-trigger > span { font-size: 20px; font-weight: 800; line-height: 1; }
+.help-trigger.is-light { border-color: var(--line-strong); box-shadow: none; }
+.hero .help-trigger { position: absolute; z-index: 3; top: 12px; right: 12px; }
 .fish-mark { position: relative; z-index: 1; width: 132px; flex: 0 0 132px; filter: drop-shadow(0 9px 12px rgba(var(--shadow-rgb), .18)); }
-.hero-fish-visual { position: relative; z-index: 1; width: 132px; height: 116px; flex: 0 0 132px; overflow: hidden; border: 0; border-radius: 17px; background: transparent; box-shadow: none; }
+.hero-fish-visual { position: relative; z-index: 1; width: 132px; height: 116px; flex: 0 0 132px; align-self: flex-end; margin-top: 32px; overflow: hidden; border: 0; border-radius: 17px; background: transparent; box-shadow: none; }
 .hero-fish-photo { width: 100%; height: 100%; border: 0; border-radius: 0; background: transparent; object-fit: cover; filter: saturate(.82); }
 .hero-fish-photo.is-mascot, .fish-card-photo.is-mascot { object-fit: contain; }
 .hero-fish-photo.is-mascot, .fish-card-photo.is-mascot { transform: scale(1.1); }
@@ -131,6 +137,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .guide-header-progress { display: flex; min-width: 122px; flex-direction: column; align-items: flex-end; gap: 4px; }
 .guide-header-progress > strong { color: rgba(255, 250, 242, .9); font: 9px "DM Mono", monospace; letter-spacing: .04em; white-space: nowrap; }
 .guide-header-progress .guide-progress { display: flex; width: 112px; gap: 4px; margin: 0; }
+.guide-header .help-trigger { margin-left: 0; }
 .camera-stop-icon { display: block; width: 14px; height: 14px; }
 
 .guide-layout { display: grid; width: 100%; max-width: 844px; min-height: 0; flex: 1 1 auto; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 12px; align-items: stretch; margin: 0 auto; padding: 8px 18px 12px; }
@@ -198,6 +205,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 
 .capture-screen { min-height: 100vh; padding-bottom: 24px; background: var(--paper); }
 .capture-header { display: flex; min-height: 70px; align-items: center; gap: 13px; padding: 11px clamp(16px, 3vw, 34px); border-bottom: 1px solid var(--line); background: var(--card); }
+.capture-header .help-trigger { margin-left: auto; }
 .capture-intro { width: min(1280px, calc(100% - 32px)); margin: 14px auto 0; color: var(--muted); font-size: 11px; line-height: 1.65; }
 .capture-layout { display: grid; width: min(1280px, calc(100% - 32px)); grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; margin: 12px auto; }
 .capture-camera-card { min-height: 0; aspect-ratio: auto; justify-content: flex-start; gap: 8px; overflow: visible; color: var(--on-dark); background: transparent; }
@@ -261,6 +269,26 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .capture-annotation-actions button.is-primary { border-color: var(--deep); color: var(--on-dark); background: var(--deep); }
 .capture-annotation-actions button:hover { filter: brightness(.96); }
 
+.help-dialog { position: fixed; inset: 0; display: none; width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: 14px; overflow: auto; border: 0; color: var(--ink); background: transparent; overscroll-behavior: contain; }
+.help-dialog[open] { display: grid; place-items: center; }
+.help-dialog::backdrop { background: rgba(15, 31, 26, .72); backdrop-filter: blur(5px); }
+.help-dialog-card { display: flex; width: min(100%, 560px); max-height: min(90dvh, 760px); flex-direction: column; gap: 14px; overflow: auto; padding: clamp(18px, 4vw, 28px); border: 1px solid var(--line); border-radius: 22px; background: var(--card); box-shadow: 0 24px 72px rgba(0, 0, 0, .28); overscroll-behavior: contain; animation: help-pop .24s cubic-bezier(.2, .8, .2, 1) both; }
+.help-dialog-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.help-dialog-heading > div > span { color: var(--teal); font-size: 10px; font-weight: 800; letter-spacing: .08em; }
+.help-dialog-heading h2 { margin: 3px 0 0; color: var(--deep); font-size: clamp(20px, 5vw, 25px); line-height: 1.3; }
+.help-dialog-close { display: grid; width: 36px; height: 36px; flex: 0 0 36px; padding: 0; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--deep); background: #fffefa; font-size: 24px; line-height: 1; cursor: pointer; }
+.help-dialog-lead { margin: 0; color: var(--ink); font-size: 14px; font-weight: 700; line-height: 1.7; }
+.help-flow { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; counter-reset: help-step; }
+.help-flow li { display: grid; grid-template-columns: 29px minmax(0, 1fr); gap: 10px; align-items: start; padding: 11px 12px; border: 1px solid var(--line-soft); border-radius: 13px; background: #f7f6ef; }
+.help-flow li > span { display: grid; width: 26px; height: 26px; place-items: center; border-radius: 50%; color: var(--on-dark); background: var(--deep); font-size: 12px; font-weight: 800; }
+.help-flow strong, .help-limit strong { color: var(--deep); font-size: 12px; }
+.help-flow p, .help-limit p { margin: 3px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.help-limit { padding: 12px 14px; border-left: 3px solid var(--action); border-radius: 0 12px 12px 0; background: rgba(var(--action-rgb), .08); }
+.help-privacy-note { margin: -4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.help-dialog-footer { display: flex; justify-content: flex-end; padding-top: 1px; }
+.help-dialog-footer button { min-height: 42px; padding: 0 20px; border: 0; border-radius: 999px; color: var(--on-dark); background: var(--deep); font-size: 12px; font-weight: 800; cursor: pointer; }
+@keyframes help-pop { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
 @media (min-width: 900px) {
   .capture-layout { grid-template-columns: minmax(0, 1.08fr) minmax(430px, .92fr); gap: 18px; margin-top: 16px; }
   .capture-camera-card { position: sticky; top: 14px; }
@@ -323,6 +351,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
     height: clamp(108px, 31vh, 148px);
     flex: 0 0 auto;
     align-self: center;
+    margin-top: 0;
   }
   .selection-content {
     display: flex;
@@ -428,4 +457,5 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
+  .help-dialog-card { animation-duration: .01ms !important; }
 }

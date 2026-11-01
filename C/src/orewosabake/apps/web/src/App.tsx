@@ -96,6 +96,7 @@ const fishList: Fish[] = [
 const MAX_CAPTURE_FRAMES = 60;
 const MAX_CAPTURE_FRAME_DIMENSION = 832;
 const CAPTURE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const HELP_SEEN_KEY = "orewosabake-help-seen-v1";
 
 function createCaptureSessionId(): string {
   const now = new Date();
@@ -270,8 +271,93 @@ function RotatePhoneIcon() {
   );
 }
 
+function HelpButton({ onClick, light = false }: { onClick: () => void; light?: boolean }) {
+  return (
+    <button
+      className={`help-trigger${light ? " is-light" : ""}`}
+      type="button"
+      aria-label="使い方を開く"
+      title="使い方"
+      onClick={onClick}
+    >
+      <span aria-hidden="true">?</span>
+    </button>
+  );
+}
+
+function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    else if (!open && dialog.open) dialog.close();
+  }, [open]);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="help-dialog"
+      aria-labelledby="help-dialog-title"
+      onClose={onClose}
+      onCancel={(event) => {
+        event.preventDefault();
+        dialogRef.current?.close();
+      }}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) dialogRef.current?.close();
+      }}
+    >
+      <section className="help-dialog-card">
+        <header className="help-dialog-heading">
+          <div>
+            <span>はじめに</span>
+            <h2 id="help-dialog-title">この作品の使い方</h2>
+          </div>
+          <button className="help-dialog-close" type="button" aria-label="ヘルプを閉じる" autoFocus onClick={() => dialogRef.current?.close()}>
+            ×
+          </button>
+        </header>
+        <p className="help-dialog-lead">魚を選び、カメラの横で参考手順を見ながら、自分で確認して進めるガイドです。</p>
+
+        <ol className="help-flow">
+          <li>
+            <span>1</span>
+            <div><strong>魚を選ぶ</strong><p>まずはアジ・ハマチ・サバ・タイのいずれかを選びます。その他の魚は、魚種別の手順がまだありません。</p></div>
+          </li>
+          <li>
+            <span>2</span>
+            <div><strong>「俺を捌け！」を押す</strong><p>iPhoneを縦に持っているときは、表示に従って横向きにします。</p></div>
+          </li>
+          <li>
+            <span>3</span>
+            <div><strong>カメラを起動して、手順を読む</strong><p>カメラの使用を許可すると映像が表示されます。各手順を確認して、自分で「次の工程へ」を押します。</p></div>
+          </li>
+        </ol>
+
+        <section className="help-limit">
+          <strong>AIについて</strong>
+          <p>試験AIが見るのは魚の頭・尾の位置だけです。切除済みか、工程が終わったか、安全に作業できているかは判定しません。工程は自動で進みません。</p>
+        </section>
+        <p className="help-privacy-note">通常のガイドでは、カメラ映像は端末内で処理され、サーバーへ送られません。参考手順は公開資料の要約で、調理経験者の確認前です。「研究用データを撮る」は任意の検証機能で、撮影画像は端末に保存します。</p>
+        <footer className="help-dialog-footer">
+          <button type="button" onClick={() => dialogRef.current?.close()}>使い方が分かった</button>
+        </footer>
+      </section>
+    </dialog>
+  );
+}
+
 function App() {
   const [screen, setScreen] = useState<Screen>("select");
+  const [helpOpen, setHelpOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem(HELP_SEEN_KEY) !== "true";
+    } catch {
+      return true;
+    }
+  });
   const [category, setCategory] = useState<Category>("よく使う");
   const [search, setSearch] = useState("");
   const [selectedFish, setSelectedFish] = useState("ハマチ");
@@ -405,6 +491,15 @@ function App() {
   const guideIsComplete = guideSession?.status === "completed";
   const currentStep = guide ? guide.steps[activeStep] : undefined;
   const fishCanContinue = selectedFish !== "その他" || search.trim().length > 0;
+
+  function closeHelp() {
+    setHelpOpen(false);
+    try {
+      window.localStorage.setItem(HELP_SEEN_KEY, "true");
+    } catch {
+      // The in-app help remains available from its button if storage is blocked.
+    }
+  }
 
   function startGuide() {
     setScreen("guide");
@@ -845,7 +940,9 @@ function App() {
           <header className="hero">
             <div className="hero-copy">
               <h1>俺を捌け！</h1>
+              <p className="hero-intro">魚を選び、カメラの横で手順を確認</p>
             </div>
+            <HelpButton onClick={() => setHelpOpen(true)} />
             <div className="hero-fish-visual" key={selectedFish} aria-live="polite">
               {selectedFishVisualData ? (
               <img className={fishImageClass("hero-fish-photo")} src={fishImage(selectedFishVisualData)} alt={`${selectedFishVisualData.name}のイラスト`} />
@@ -940,6 +1037,7 @@ function App() {
           <header className="capture-header">
             <button className="back-link" type="button" onClick={backFromCapture} aria-label="魚の選択に戻る">←</button>
             <div className="guide-brand"><strong>研究用データ収集</strong><span>{chosenFish} · カメラ画像はアップロードされません</span></div>
+            <HelpButton light onClick={() => setHelpOpen(true)} />
           </header>
 
           <p className="capture-intro">AIの頭・尾候補を確認し、人がラベルを選んで撮影します。画像は端末に保存し、AI候補と選択ラベルをCSVに記録します。</p>
@@ -1085,6 +1183,7 @@ function App() {
                 <span aria-hidden="true">←</span><span>魚の選択に戻る</span>
               </button>
               <strong>俺を捌け！</strong>
+              <HelpButton onClick={() => setHelpOpen(true)} />
             </div>
             <div className="orientation-main">
               <RotatePhoneIcon />
@@ -1114,6 +1213,7 @@ function App() {
                 </div>
               ) : <span className="guide-status-label">{guideSessionLoading ? "手順を準備中…" : guideMessage ? "読み込みエラー" : "手順未登録"}</span>}
               {cameraStatus === "active" ? <button className="camera-stop-inline" type="button" onClick={stopCamera} aria-label="カメラを停止"><CameraStopIcon /></button> : null}
+              <HelpButton onClick={() => setHelpOpen(true)} />
             </header>
 
             <div className="guide-layout">
@@ -1199,6 +1299,7 @@ function App() {
           </div>
         </section>
       )}
+      <HelpDialog open={helpOpen} onClose={closeHelp} />
     </main>
   );
 }
