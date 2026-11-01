@@ -153,7 +153,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .guide-fish-bubble { position: absolute; top: 3px; right: 0; max-width: 100%; padding: 7px 10px; border-radius: 14px; color: var(--deep); background: var(--gold); font-size: 10px; font-weight: 700; line-height: 1.3; text-align: center; white-space: nowrap; }
 .guide-fish-bubble::after { position: absolute; right: 18px; bottom: -5px; width: 10px; height: 10px; background: var(--gold); content: ""; transform: rotate(45deg); }
 
-.guide-panel { display: grid; min-width: 0; min-height: 88px; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) 170px; gap: 10px; align-items: center; padding: 10px 14px; border: 0; border-radius: 12px; background: var(--card); box-shadow: none; }
+.guide-panel { position: relative; display: grid; min-width: 0; min-height: 76px; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) 170px; gap: 10px; align-items: center; padding: 8px 14px; border: 0; border-radius: 12px; background: var(--card); box-shadow: none; }
 .guide-progress span { height: 4px; flex: 1; border-radius: 9px; background: var(--line-soft); }
 .guide-progress span.is-active { background: var(--teal); }
 .guide-step { min-width: 0; padding: 0; }
@@ -168,6 +168,21 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .observation-note p, .observation-note strong, .observation-note small { display: block; margin: 0; }
 .observation-note strong { font-size: 9px; }
 .observation-note small { margin-top: 2px; color: var(--muted); font-size: 8px; line-height: 1.35; }
+.guide-observation-note { position: relative; display: grid; grid-template-columns: 23px minmax(0, 1fr) 22px; gap: 7px; padding: 6px 8px; }
+.guide-observation-copy { min-width: 0; }
+.guide-observation-heading { display: flex; min-width: 0; align-items: center; gap: 5px; }
+.guide-observation-heading strong { min-width: 0; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.guide-manual-label { flex: 0 0 auto; padding: 2px 4px; border-radius: 5px; color: var(--deep); background: rgba(var(--deep-rgb), .08); font-size: 7px; font-weight: 700; line-height: 1.2; white-space: nowrap; }
+.guide-observation-copy > small { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.guide-observation-details { position: static; align-self: center; }
+.guide-observation-details > summary { display: grid; width: 22px; height: 22px; place-items: center; border: 1px solid rgba(var(--deep-rgb), .12); border-radius: 50%; color: var(--deep-soft); background: rgba(var(--deep-rgb), .05); font-size: 11px; font-weight: 700; line-height: 1; list-style: none; cursor: pointer; }
+.guide-observation-details > summary::-webkit-details-marker { display: none; }
+.guide-observation-details > summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.guide-observation-details[open] > summary { color: var(--on-dark); background: var(--deep); }
+.guide-observation-popover { position: absolute; z-index: 20; right: 0; bottom: calc(100% + 9px); width: min(320px, calc(100vw - 40px)); padding: 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--card); box-shadow: 0 8px 24px rgba(var(--shadow-rgb), .24); }
+.guide-observation-popover p { font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.guide-observation-popover p + p { margin-top: 6px; }
+.guide-observation-popover p:first-child strong { color: var(--deep); font-size: 11px; }
 .guide-actions { min-width: 0; }
 .guide-controls { display: grid; grid-template-columns: .75fr 1.25fr; gap: 6px; margin: 0; }
 .guide-controls button { min-height: 35px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--deep-soft); background: var(--card); font-size: 9px; font-weight: 700; cursor: pointer; }
@@ -355,13 +370,17 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
   .guide-fish-stage { padding-top: 30px; }
   .guide-fish-image { width: min(82px, 56%); height: 116px; }
   .guide-fish-bubble { padding: 6px 7px; font-size: 9px; }
-  .guide-panel { min-height: 76px; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) 142px; gap: 7px; padding: 8px 10px; }
+  .guide-panel { min-height: 66px; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) 142px; gap: 7px; padding: 6px 10px; }
   .guide-step h2 { font-size: 13px; }
-  .guide-step p { font-size: 9px; }
-  .observation-note { gap: 5px; padding: 6px; }
-  .observation-note small { font-size: 7px; }
+  .guide-step p { font-size: 10px; }
+  .guide-step > .guide-message { font-size: 9px; }
+  .guide-observation-note { grid-template-columns: 20px minmax(0, 1fr) 22px; gap: 5px; padding: 5px 6px; }
+  .guide-observation-note > span { width: 20px; height: 20px; flex-basis: 20px; }
+  .guide-observation-heading strong { font-size: 9px; }
+  .guide-manual-label { padding: 2px 3px; font-size: 7px; }
+  .guide-observation-copy > small { font-size: 8px; }
   .guide-controls { gap: 4px; }
-  .guide-controls button { min-height: 32px; font-size: 8px; }
+  .guide-controls button { min-height: 32px; font-size: 9px; }
 }
 
 @media (orientation: landscape) and (max-width: 480px) {
@@ -372,10 +391,11 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 @media (max-height: 540px) and (orientation: landscape) {
   .guide-header { height: 42px; min-height: 42px; flex-basis: 42px; }
   .guide-layout { min-height: 0; gap: 7px; padding-top: 5px; padding-bottom: 8px; }
-  .guide-panel { min-height: 72px; padding-top: 6px; padding-bottom: 6px; }
+  .guide-panel { min-height: 64px; padding-top: 5px; padding-bottom: 5px; }
   .guide-step h2 { margin-bottom: 3px; font-size: 13px; }
-  .guide-step p { font-size: 8px; }
-  .guide-controls button { min-height: 30px; }
+  .guide-step p { font-size: 9px; }
+  .guide-step > .guide-message { font-size: 8px; }
+  .guide-controls button { min-height: 30px; font-size: 9px; }
 }
 
 @media (orientation: landscape) and (max-height: 650px) {

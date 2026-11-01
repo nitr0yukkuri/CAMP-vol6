@@ -406,13 +406,13 @@ function App() {
         setActiveStep(session.currentStepIndex);
       }).catch(() => {
         if (!guideController.signal.aborted) {
-          setGuideMessage("サーバーに接続できないため、共通の表示モックを使っています。");
+          setGuideMessage("共通の表示モックです。");
         }
       }).finally(() => {
         if (!guideController.signal.aborted) setGuideSessionLoading(false);
       });
     } else {
-      setGuideMessage(`${chosenFish}の魚種別ガイドは未登録のため、共通の表示モックを使っています。`);
+      setGuideMessage(`${chosenFish}専用ガイドは未登録です。`);
     }
 
     void startCamera();
@@ -784,6 +784,30 @@ function App() {
       ? `検出: ${headTailDetection.observation.detections.map((detection) => `${detection.label === "head" ? "頭" : "尾"} ${Math.round(detection.score * 100)}%`).join(" · ")}`
       : "頭・尾を探しています。検出されないことだけでは、切除済みとは判断しません。"
     : headTailDetection.message;
+  const guideDetectionTitle = headTailDetection.status === "active"
+    ? "頭・尾を確認中"
+    : headTailDetection.status === "loading"
+      ? "AI準備中"
+      : headTailDetection.status === "paused"
+        ? "認識一時停止"
+        : headTailDetection.status === "unavailable"
+          ? "認識モデルなし"
+          : headTailDetection.status === "error"
+            ? "認識エラー"
+            : "AI待機中";
+  const guideDetectionSummary = headTailDetection.status === "active"
+    ? headTailDetection.observation?.detections.length
+      ? "検出枠を表示中"
+      : "頭・尾を探しています"
+    : headTailDetection.status === "loading"
+      ? "認識モデルを読み込み中"
+      : headTailDetection.status === "paused"
+        ? "画面を表示すると再開します"
+        : headTailDetection.status === "unavailable"
+          ? "AIを利用できません"
+          : headTailDetection.status === "error"
+            ? "カメラを再起動してください"
+            : "カメラ起動後に確認します";
 
   return (
     <main className={`app-root ${screen === "guide" ? "is-guide" : screen === "capture" ? "is-capture" : ""}`}>
@@ -1099,13 +1123,24 @@ function App() {
                     {guideMessage ? <p className="guide-message" role="status">{guideMessage}</p> : null}
                   </div>
                 ) : null}
-                <div className="observation-note" data-state={headTailDetection.status} aria-live="off">
-                  <span>{headTailDetection.status === "active" ? "AI" : "INFO"}</span>
-                  <p>
-                    <strong>{detectionTitle}</strong>
-                    <small>{detectionResult} 工程は自動で進みません。</small>
-                    <small className="model-scope-note">公開魚画像で学習した試験モデルです。調理台の魚では未検証です。</small>
-                  </p>
+                <div className="observation-note guide-observation-note" data-state={headTailDetection.status} aria-live="off">
+                  <span aria-hidden="true">AI</span>
+                  <div className="guide-observation-copy">
+                    <div className="guide-observation-heading">
+                      <strong>{guideDetectionTitle}</strong>
+                      <span className="guide-manual-label">工程は手動</span>
+                    </div>
+                    <small>{guideDetectionSummary}</small>
+                  </div>
+                  <details className="guide-observation-details">
+                    <summary aria-label="AI表示の詳細と注意事項">i</summary>
+                    <div className="guide-observation-popover">
+                      <p><strong>{detectionTitle}</strong></p>
+                      <p>{detectionResult}</p>
+                      <p>工程は自動で進みません。頭・尾の表示は参考用で、切除済みかどうかは利用者が確認してください。</p>
+                      <p>試験モデルは公開魚画像で学習しており、調理台の魚では未検証です。</p>
+                    </div>
+                  </details>
                 </div>
                 <div className="guide-actions">
                   <div className="guide-controls">
