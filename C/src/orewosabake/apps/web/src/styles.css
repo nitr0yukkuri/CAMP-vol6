@@ -128,7 +128,6 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .back-link { display: grid; width: 27px; height: 27px; flex: 0 0 27px; place-items: center; border: 1px solid rgba(255, 250, 242, .26); border-radius: 50%; color: var(--on-dark); background: rgba(255, 255, 255, .08); font-size: 17px; cursor: pointer; }
 .guide-header .back-link { display: inline-flex; width: auto; min-height: 30px; flex: 0 0 auto; align-items: center; gap: 6px; padding: 0 10px; border-radius: 999px; font-size: 10px; font-weight: 600; white-space: nowrap; }
 .guide-header .back-link > span:first-child { font-size: 17px; line-height: 1; }
-.camera-stop-inline { display: grid; width: 30px; min-height: 30px; flex: 0 0 30px; padding: 0; place-items: center; border: 1px solid rgba(255, 250, 242, .26); border-radius: 50%; color: var(--on-dark); background: rgba(255, 255, 255, .08); cursor: pointer; }
 .guide-brand { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .guide-brand strong { color: var(--deep); font-size: 14px; font-weight: 800; letter-spacing: .04em; }
 .guide-brand span { color: var(--muted); font-size: 10px; }
