@@ -150,8 +150,8 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 
 .guide-fish-stage { position: relative; display: grid; min-width: 0; min-height: 0; height: 100%; place-items: center; padding-top: 34px; }
 .guide-fish-image { display: block; width: min(96px, 52%); height: 136px; max-height: calc(100% - 30px); object-fit: contain; filter: drop-shadow(0 8px 10px rgba(0, 0, 0, .22)); }
-.guide-fish-bubble { position: absolute; top: 3px; right: 0; max-width: 100%; padding: 7px 10px; border-radius: 14px; color: var(--deep); background: var(--gold); font-size: 10px; font-weight: 700; line-height: 1.3; text-align: center; white-space: nowrap; }
-.guide-fish-bubble::after { position: absolute; right: 18px; bottom: -5px; width: 10px; height: 10px; background: var(--gold); content: ""; transform: rotate(45deg); }
+.guide-fish-bubble { position: absolute; z-index: 2; top: 12px; left: 50%; right: auto; max-width: calc(100% - 16px); padding: 7px 10px; border-radius: 14px; color: var(--deep); background: #fff; box-shadow: 0 3px 10px rgba(0, 0, 0, .12); font-size: 10px; font-weight: 700; line-height: 1.3; text-align: center; white-space: nowrap; transform: translateX(-50%); }
+.guide-fish-bubble::after { position: absolute; bottom: -5px; left: 50%; width: 10px; height: 10px; background: #fff; content: ""; transform: translateX(-50%) rotate(45deg); }
 
 .guide-panel { position: relative; display: grid; min-width: 0; min-height: 76px; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) 170px; gap: 10px; align-items: center; padding: 8px 14px; border: 0; border-radius: 12px; background: var(--card); box-shadow: none; }
 .guide-progress span { height: 4px; flex: 1; border-radius: 9px; background: var(--line-soft); }
