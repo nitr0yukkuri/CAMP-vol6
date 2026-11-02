@@ -992,7 +992,10 @@ function App() {
     if (guideSessionMode === "local") {
       const session = advanceLocalGuideSession(guideSession);
       if (session.status === "completed") {
-        backToFishSelection();
+        setGuideSession(session);
+        setActiveStep(session.currentStepIndex);
+        setGuideMessage("");
+        stopCamera();
         return;
       }
       setGuideSession(session);
@@ -1018,7 +1021,10 @@ function App() {
       const session = await advanceGuideSession(guideSession, signal);
       if (signal.aborted) return;
       if (session.status === "completed") {
-        backToFishSelection();
+        setGuideSession(session);
+        setActiveStep(session.currentStepIndex);
+        setGuideMessage("");
+        stopCamera();
         return;
       }
       setGuideSession(session);
@@ -1349,8 +1355,8 @@ function App() {
               </button>
               <div className="guide-brand"><strong>{chosenFish}先生のさばきガイド</strong></div>
               {guideSession ? (
-                <div className="guide-header-progress" aria-label={`工程 ${activeStep + 1} / ${guideSession.guide.steps.length}`}>
-                  <strong>STEP {activeStep + 1} / {guideSession.guide.steps.length}</strong>
+                <div className="guide-header-progress" aria-label={guideIsComplete ? "ガイド完了" : `工程 ${activeStep + 1} / ${guideSession.guide.steps.length}`}>
+                  <strong>{guideIsComplete ? "ガイド完了" : `STEP ${activeStep + 1} / ${guideSession.guide.steps.length}`}</strong>
                   <div className="guide-progress" aria-hidden="true">
                     {guideSession.guide.steps.map((step, index) => <span key={step.id} className={index <= activeStep ? "is-active" : ""} />)}
                   </div>
@@ -1417,8 +1423,8 @@ function App() {
                   </div>
                 ) : (
                   <div className="guide-step guide-empty-state" aria-live="polite">
-                    <h2>{guideSessionLoading ? "参考手順を準備中" : "この魚の手順は未登録です"}</h2>
-                    <p>{guideMessage || "公開資料を確認した魚種から順に追加しています。共通の仮手順を魚種別ガイドとして表示することはありません。"}</p>
+                    <h2>{guideSessionLoading ? "参考手順を準備中" : guideIsComplete ? "ガイド完了" : "この魚の手順は未登録です"}</h2>
+                    <p>{guideIsComplete ? "この魚のガイドはここまでです。次の調理や加工はガイド対象外です。" : guideMessage || "公開資料を確認した魚種から順に追加しています。共通の仮手順を魚種別ガイドとして表示することはありません。"}</p>
                   </div>
                 )}
                 {suggestedStep && stageTransition ? (
@@ -1429,12 +1435,14 @@ function App() {
                     <small>状態判定は提案です。魚と手元を確認してから「次の工程へ」を押してください。</small>
                   </section>
                 ) : null}
-                <div className="guide-actions">
-                  <div className="guide-controls">
-                    <button type="button" onClick={() => { setActiveStep((step) => Math.max(0, step - 1)); setGuideMessage(""); }} disabled={!guideSession || activeStep === 0}>戻る</button>
-                    <button type="button" onClick={() => void advanceStep()} disabled={!guideSession || guideSessionLoading || guideAdvancing || (isLastGuideStep && guideIsComplete)}>{guideSessionLoading ? "準備中…" : guideAdvancing ? "更新中…" : isLastGuideStep && guideIsComplete ? "完了" : isLastGuideStep ? "ガイドを完了" : "次の工程へ"} <span>→</span></button>
+                {!guideIsComplete ? (
+                  <div className="guide-actions">
+                    <div className="guide-controls">
+                      <button type="button" onClick={() => { setActiveStep((step) => Math.max(0, step - 1)); setGuideMessage(""); }} disabled={!guideSession || activeStep === 0}>戻る</button>
+                      <button type="button" onClick={() => void advanceStep()} disabled={!guideSession || guideSessionLoading || guideAdvancing || (isLastGuideStep && guideIsComplete)}>{guideSessionLoading ? "準備中…" : guideAdvancing ? "更新中…" : isLastGuideStep ? "ガイドを完了" : "次の工程へ"} <span>→</span></button>
+                    </div>
                   </div>
-                </div>
+                ) : null}
               </aside>
             </div>
           </div>
