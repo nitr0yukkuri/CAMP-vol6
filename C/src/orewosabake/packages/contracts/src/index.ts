@@ -27,8 +27,6 @@ export const GuideStepSchema = z.object({
 export const GuideSchema = z.object({
   title: z.string(),
   steps: z.array(GuideStepSchema).min(1),
-  scope: z.literal("edible_portion").default("edible_portion"),
-  completionMessage: z.string().default("この魚介の可食部を取り分ける工程はここまでです。以降の切り分けや調理はガイド対象外です。"),
   // Keep the legacy default so sessions created before source metadata was added still parse.
   source: z.enum(["mock", "public_reference"]).default("mock"),
   sourceLabel: z.string().optional(),
@@ -71,7 +69,7 @@ export const GuideSessionSchema = z.object({
 });
 
 export const CatalogSchema = z.object({
-  fish: z.array(z.object({ id: FishIdSchema, name: z.string(), guideAvailable: z.boolean() })),
+  fish: z.array(z.object({ id: FishIdSchema, name: z.string() })),
   preparations: z.array(z.object({ id: PreparationIdSchema, name: z.string() })),
   guideAvailability: z.enum(["not_configured", "partial", "available"]),
 });
@@ -278,7 +276,7 @@ export const REFERENCE_GUIDES: Partial<Record<GuideRequest["fishId"], Guide>> = 
       { id: "tako_prepared", title: "下処理済みのタコを用意する", description: "生きたタコは吸盤や動きで扱いにくいので、初心者は魚屋で下処理済みのものを選ぼう。", expectedState: "unknown" },
       { id: "tako_head", title: "頭の内側を確認する", description: "丸ごとの下処理済みを使う場合は、頭の内側に内臓が残っていないか確認しよう。迷ったら購入店に確認してね。", expectedState: "opened" },
       { id: "tako_beak", title: "口を取り除く", description: "足の付け根の中心にある口を取り除くよ。硬い部分が残らないように確認しよう。", expectedState: "filleting" },
-      { id: "tako_clean", title: "汚れを落として確認する", description: "ぬめりや汚れを落として洗い、水気を取るよ。食べられる部分が頭や足から分けられているか、目で確認しよう。", expectedState: "filleted" },
+      { id: "tako_clean", title: "汚れを落として切り分ける", description: "ぬめりや汚れを落として洗い、水気を取るよ。足は関節に沿って切り分け、滑らないまな板で作業しよう。", expectedState: "filleted" },
     ],
   }),
   iwashi: GuideSchema.parse({
@@ -320,7 +318,7 @@ export const REFERENCE_GUIDES: Partial<Record<GuideRequest["fishId"], Guide>> = 
       { id: "katsuo_guts", title: "頭と内臓を外す", description: "腹を開いて内臓を外し、血合いを洗うよ。魚が大きくて不安なら購入店で処理してもらおう。", expectedState: "opened" },
       { id: "katsuo_wash", title: "水気をふき取る", description: "うろこと腹の血合いを洗い流したら、水気をふき取ろう。", expectedState: "opened" },
       { id: "katsuo_first_side", title: "片側の身を外す", description: "腹側と背側から中骨に沿って切り込み、尾側から身をはがしていくよ。", expectedState: "filleting" },
-      { id: "katsuo_second_side", title: "反対側の身を外す", description: "裏返して反対側も同じように中骨から外そう。", expectedState: "filleted" },
+      { id: "katsuo_second_side", title: "反対側も外して柵にする", description: "裏返して反対側も同じように外し、腹骨を取って刺身用の柵に整えよう。", expectedState: "filleted" },
       { id: "katsuo_check", title: "血合いと骨を確認する", description: "血合いや小骨が残っていないか確認してね。生食は販売店の表示と保存方法を守ろう。", expectedState: "filleted" },
     ],
   }),
@@ -467,42 +465,16 @@ const PREPARATION_BY_FISH: Record<GuideRequest["fishId"], GuideRequest["preparat
   other_finfish: "three_piece_fillet",
 };
 
-// Only map species whose sources provide a complete, user-performable edible-portion guide.
-// Tuna and ayu do not match the goal; crab and prepared eel-family guides stop before extraction.
-const EDIBLE_PORTION_STOP_STEP_BY_FISH: Partial<Record<GuideRequest["fishId"], string>> = {
-  salmon: "salmon_bones",
-  hamachi: "hamachi_check",
-  aji: "aji_trim",
-  saba: "saba_bones",
-  tai: "tai_trim",
-  ebi: "ebi_wash",
-  ika: "ika_check",
-  tako: "tako_clean",
-  iwashi: "iwashi_finish",
-  buri: "buri_check",
-  katsuo: "katsuo_check",
-  hirame: "hirame_check",
-  karei: "karei_check",
-  tachiuo: "tachiuo_check",
-  kawahagi: "kawahagi_check",
-  other_finfish: "other_finfish_check",
-};
-
-export function getPreparationIdForFish(_fishId: GuideRequest["fishId"]): GuideRequest["preparationId"] {
-  return "edible_portion";
+export function getPreparationIdForFish(fishId: GuideRequest["fishId"]): GuideRequest["preparationId"] {
+  return PREPARATION_BY_FISH[fishId];
 }
 
 export function getReferenceGuide(
   fishId: GuideRequest["fishId"],
   preparationId?: GuideRequest["preparationId"],
 ): Guide | undefined {
-  if (preparationId && preparationId !== "edible_portion" && PREPARATION_BY_FISH[fishId] !== preparationId) return undefined;
-  const guide = REFERENCE_GUIDES[fishId];
-  const stopStepId = EDIBLE_PORTION_STOP_STEP_BY_FISH[fishId];
-  if (!guide || !stopStepId) return undefined;
-  const stopIndex = guide.steps.findIndex((step) => step.id === stopStepId);
-  if (stopIndex < 0) return undefined;
-  return GuideSchema.parse({ ...guide, steps: guide.steps.slice(0, stopIndex + 1) });
+  if (preparationId && PREPARATION_BY_FISH[fishId] !== preparationId) return undefined;
+  return REFERENCE_GUIDES[fishId];
 }
 
 export function resolveGuideFishId(fishName: string): GuideRequest["fishId"] | undefined {
@@ -550,33 +522,45 @@ export const ORIENTATION_CONFIG: OrientationConfig = OrientationConfigSchema.par
 
 export const CATALOG: Catalog = CatalogSchema.parse({
   fish: [
-    { id: "maguro", name: "マグロ", guideAvailable: false },
-    { id: "salmon", name: "サーモン", guideAvailable: true },
-    { id: "hamachi", name: "ハマチ", guideAvailable: true },
-    { id: "aji", name: "あじ", guideAvailable: true },
-    { id: "saba", name: "さば", guideAvailable: true },
-    { id: "tai", name: "鯛", guideAvailable: true },
-    { id: "ayu", name: "鮎", guideAvailable: false },
-    { id: "ebi", name: "エビ", guideAvailable: true },
-    { id: "kani", name: "カニ", guideAvailable: false },
-    { id: "ika", name: "イカ", guideAvailable: true },
-    { id: "tako", name: "タコ", guideAvailable: true },
-    { id: "iwashi", name: "イワシ", guideAvailable: true },
-    { id: "buri", name: "ぶり", guideAvailable: true },
-    { id: "katsuo", name: "カツオ", guideAvailable: true },
-    { id: "hirame", name: "ヒラメ", guideAvailable: true },
-    { id: "karei", name: "カレイ", guideAvailable: true },
-    { id: "unagi", name: "ウナギ", guideAvailable: false },
-    { id: "anago", name: "アナゴ", guideAvailable: false },
-    { id: "hamo", name: "はも", guideAvailable: false },
-    { id: "tachiuo", name: "太刀魚", guideAvailable: true },
-    { id: "kawahagi", name: "カワハギ", guideAvailable: true },
-    { id: "other_finfish", name: "その他の魚", guideAvailable: true },
+    { id: "maguro", name: "マグロ" },
+    { id: "salmon", name: "サーモン" },
+    { id: "hamachi", name: "ハマチ" },
+    { id: "aji", name: "あじ" },
+    { id: "saba", name: "さば" },
+    { id: "tai", name: "鯛" },
+    { id: "ayu", name: "鮎" },
+    { id: "ebi", name: "エビ" },
+    { id: "kani", name: "カニ" },
+    { id: "ika", name: "イカ" },
+    { id: "tako", name: "タコ" },
+    { id: "iwashi", name: "イワシ" },
+    { id: "buri", name: "ぶり" },
+    { id: "katsuo", name: "カツオ" },
+    { id: "hirame", name: "ヒラメ" },
+    { id: "karei", name: "カレイ" },
+    { id: "unagi", name: "ウナギ" },
+    { id: "anago", name: "アナゴ" },
+    { id: "hamo", name: "はも" },
+    { id: "tachiuo", name: "太刀魚" },
+    { id: "kawahagi", name: "カワハギ" },
+    { id: "other_finfish", name: "その他の魚（一般的な三枚おろし）" },
   ],
   preparations: [
-    { id: "edible_portion", name: "可食部を取り分ける" },
+    { id: "three_piece_fillet", name: "三枚おろし" },
+    { id: "five_piece_fillet", name: "五枚おろし" },
+    { id: "hand_open", name: "手開き" },
+    { id: "tuna_saku", name: "マグロの柵の下処理" },
+    { id: "skewer_prep", name: "串打ち" },
+    { id: "shrimp_prep", name: "エビの下処理" },
+    { id: "crab_prep", name: "カニの下処理" },
+    { id: "squid_cleaning", name: "イカの下処理" },
+    { id: "octopus_cleaning", name: "タコの下処理" },
+    { id: "eel_prep", name: "ウナギ・アナゴの下処理済み身" },
+    { id: "hamo_shop_prepared", name: "ハモの骨切り済み身" },
+    { id: "fish_portioning", name: "切り身への下処理" },
+    { id: "kawahagi_prep", name: "カワハギの皮むきと下処理" },
   ],
-  guideAvailability: "partial",
+  guideAvailability: "available",
 });
 
 export const MOCK_OBSERVATION: Observation = ObservationSchema.parse({
