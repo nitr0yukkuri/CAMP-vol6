@@ -85,7 +85,7 @@ APIトークンはCloudflareの「Edit Cloudflare Workers」権限を選び、�
 
 本番WorkerではCloudflare側にもキー登録が必要です。`npx wrangler secret put GEMINI_API_KEY --config apps/web/wrangler.jsonc`を実行し、プロンプトにAPIキーを入力してください。
 
-**モデルの受け渡しも必要です。** `head-tail.tflite` はGit管理対象外なので、ワークフローは同じGitHubリポジトリのReleaseから取得し、登録されたSHA-256と照合します。Releaseを作成し、`head-tail.tflite` という名前でモデルを添付したうえで、GitHubの **Settings → Secrets and variables → Actions → Variables** に次を登録してください。
+**モデルの受け渡しも必要です。** `head-tail.tflite` はGit管理対象外なので、ワークフローは同じGitHubリポジトリのReleaseから `head-tail-model.zip` を取得します。ZIPにはルート直下に `head-tail.tflite` だけを入れてください。GitHubの **Settings → Secrets and variables → Actions → Variables** に次を登録します。`HEAD_TAIL_MODEL_SHA256` はZIPではなく、展開後のTFLiteファイルのSHA-256です。
 
 | Variable | 値 |
 | --- | --- |
@@ -98,7 +98,7 @@ Windowsでは、モデルのSHA-256を次のコマンドで確認できます。
 Get-FileHash .\apps\web\public\models\head-tail.tflite -Algorithm SHA256
 ```
 
-Releaseアセットのチェックサムが一致しない場合、TFLite形式でない場合、または25 MiB以上の場合は公開を止めます。モデルはサイトから配信される公開アセットなので、Releaseにも公開されます。GitHub Secretにモデル本体を入れる必要はありません。
+ZIPが破損している、ルート直下に `head-tail.tflite` 以外のファイルを含む、展開後のモデルが25 MiB以上、またはモデルのSHA-256が一致しない場合は公開を止めます。モデルはサイトから配信される公開アセットなので、Releaseにも公開されます。GitHub Secretにモデル本体を入れる必要はありません。
 
 工程判定用モデルは別途任意の魚種別ファイルです。未配置でも頭・尾のモデルがあればサイトを公開でき、画面は工程判定を利用不可として扱います。
 
@@ -124,7 +124,7 @@ Releaseアセットのチェックサムが一致しない場合、TFLite形式�
 
 ChatGPT Sitesなど静的ホストではWorker APIを同梱していないため、画面は同じ魚別参考手順を使う端末内セッションに切り替えます。この場合の進行状態は画面を閉じると消えます。Cloudflare WorkerではDurable Objectのセッションを使い、Node版APIではメモリ内セッションを使います。
 
-Gemini画像確認の指示と制約は [apps/api/prompts/fish-guide.md](apps/api/prompts/fish-guide.md) にあります。確認済みガイドだけを根拠にし、画像だけで工程完了や安全性を断定しません。Workerの画像確認はIPごとに1分10回までです。
+Gemini画像確認の指示と制約は [apps/api/prompts/fish-guide.md](apps/api/prompts/fish-guide.md) にあります。表示中の参考ガイドだけを根拠にし、画像だけで工程完了や安全性を断定しません。Workerの画像確認はIPごとに1分10回までです。
 
 工程進行APIは魚種ごとの参考手順をセッションに保存します。セッション開始には `POST /api/guide/sessions` へ魚種・目的を送り、次へ進むときは現在の `stepId` と `source`（`button` または `voice`）を送ります。音声の場合はブラウザ側で音声認識した `transcript: "次へ"` が必要です。現在の工程IDと一致しない操作、認識された言葉が「次へ」でない操作では進みません。Cloudflare環境ではセッションと進捗をDurable ObjectのSQLiteストレージに保存するため、Workerの再起動後も利用できます。ローカルNode APIではメモリ内だけに保持され、API再起動で消えます。保持セッションは最大500件で、`updatedAt`から30分経過したものは次のAPIリクエストまたはDurable Objectの期限アラームで削除されます。上限到達時は `503 SESSION_CAPACITY_REACHED` を返します。公開Workerではクライアントごとに開始枠10件を持つトークンバケットで制限し、10秒ごとに1件分を補充します。上限時は `429 SESSION_RATE_LIMITED` と `Retry-After` を返します。Cloudflareが付与する `CF-Connecting-IP` をSHA-256でハッシュした値を制限キーにします。生IPはDBに保存しませんが、ハッシュも匿名化ではないため、トークン枠が補充される期限（最大100秒）に合わせてDurable Objectの期限アラームで削除します。これは単一IPからの連続作成を抑える対策で、複数IPを使う分散リクエストすべてを防ぐものではありません。AIの画像確認は静止画上の参考情報です。工程進行は利用者が自分で確認して操作します。
 
