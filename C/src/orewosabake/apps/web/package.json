@@ -8,6 +8,7 @@
     "dev": "vite --host 127.0.0.1",
     "prebuild": "node scripts/copy-mediapipe-wasm.mjs",
     "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "postbuild": "node scripts/remove-local-worker-vars.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

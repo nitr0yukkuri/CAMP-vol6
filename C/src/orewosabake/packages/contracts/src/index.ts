@@ -50,6 +50,22 @@ export const GuideRequestSchema = z.object({
   preparationId: PreparationIdSchema,
 }).strict();
 
+export const GuideImageAnalysisRequestSchema = z.object({
+  fishId: FishIdSchema,
+  stepId: z.string().min(1).max(100),
+  imageData: z.string()
+    .max(2_900_000)
+    .regex(/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/, "JPEG形式の画像が必要です。"),
+}).strict();
+
+export const GuideImageAnalysisResponseSchema = z.object({
+  model: z.string().min(1),
+  certainty: z.enum(["observed", "uncertain"]),
+  visibleParts: z.array(z.enum(["head", "body", "tail"])).max(3),
+  evidence: z.string().max(240),
+  caution: z.string().max(180),
+}).strict();
+
 export const AdvanceGuideStepRequestSchema = z.object({
   stepId: z.string().min(1),
   source: z.enum(["button", "voice"]),
@@ -113,7 +129,10 @@ export type FishCategory = z.infer<typeof FishCategorySchema>;
 export type GuideContextRequest = z.infer<typeof GuideContextRequestSchema>;
 export type GuideStep = z.infer<typeof GuideStepSchema>;
 export type Guide = z.infer<typeof GuideSchema>;
+export type FishId = z.infer<typeof FishIdSchema>;
 export type GuideRequest = z.infer<typeof GuideRequestSchema>;
+export type GuideImageAnalysisRequest = z.infer<typeof GuideImageAnalysisRequestSchema>;
+export type GuideImageAnalysisResponse = z.infer<typeof GuideImageAnalysisResponseSchema>;
 export type AdvanceGuideStepRequest = z.infer<typeof AdvanceGuideStepRequestSchema>;
 export type GuideSession = z.infer<typeof GuideSessionSchema>;
 export type Catalog = z.infer<typeof CatalogSchema>;

@@ -1,8 +1,12 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   AdvanceGuideStepRequestSchema,
   CATALOG,
+  GuideImageAnalysisRequestSchema,
   GuideContextRequestSchema,
   GuideRequestSchema,
   GuideSessionSchema,
@@ -14,11 +18,17 @@ import {
   ORIENTATION_CONFIG,
   type GuideSession,
 } from "@orewosabake/contracts";
+import { analyzeGuideImage, GeminiRequestError } from "./gemini.js";
+
+const projectEnvPath = resolve(dirname(fileURLToPath(import.meta.url)), "../../../.env");
+if (existsSync(projectEnvPath)) process.loadEnvFile(projectEnvPath);
 
 const port = Number(process.env.PORT ?? 3001);
 const host = process.env.HOST ?? "127.0.0.1";
 
 const MAX_BODY_BYTES = 16 * 1024;
+const MAX_ANALYSIS_BODY_BYTES = 2_950_000;
+const MAX_ANALYSIS_IMAGE_BYTES = 2_000_000;
 const MAX_GUIDE_SESSIONS = 500;
 const GUIDE_SESSION_TTL_MS = 30 * 60 * 1000;
 const guideSessions = new Map<string, GuideSession>();
@@ -50,14 +60,14 @@ function sendError(
   sendJson(response, status, { error: { code, message, ...(details === undefined ? {} : { details }) } });
 }
 
-async function readJsonBody(request: import("node:http").IncomingMessage): Promise<unknown> {
+async function readJsonBody(request: import("node:http").IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
   const contentType = request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase();
   if (contentType !== "application/json") {
     throw Object.assign(new Error("Content-Typeにapplication/jsonを指定してください。"), { status: 415, code: "UNSUPPORTED_MEDIA_TYPE" });
   }
 
   const declaredLength = Number(request.headers["content-length"] ?? 0);
-  let tooLarge = Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES;
+  let tooLarge = Number.isFinite(declaredLength) && declaredLength > maxBytes;
 
   const chunks: Buffer[] = [];
   let size = 0;
@@ -65,7 +75,7 @@ async function readJsonBody(request: import("node:http").IncomingMessage): Promi
     if (tooLarge) continue;
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.byteLength;
-    if (size > MAX_BODY_BYTES) {
+    if (size > maxBytes) {
       tooLarge = true;
       chunks.length = 0;
       continue;
@@ -73,7 +83,7 @@ async function readJsonBody(request: import("node:http").IncomingMessage): Promi
     chunks.push(buffer);
   }
   if (tooLarge) {
-    throw Object.assign(new Error("リクエストのサイズが上限（16 KiB）を超えています。"), { status: 413, code: "PAYLOAD_TOO_LARGE" });
+    throw Object.assign(new Error(`リクエストのサイズが上限（${Math.round(maxBytes / 1024)} KiB）を超えています。`), { status: 413, code: "PAYLOAD_TOO_LARGE" });
   }
 
   try {
@@ -136,6 +146,50 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
   }
 
   pruneExpiredGuideSessions();
+
+  if (pathname === "/api/guide/analyze" && request.method === "POST") {
+    let body: unknown;
+    try {
+      body = await readJsonBody(request, MAX_ANALYSIS_BODY_BYTES);
+    } catch (error) {
+      const failure = error as Error & { status?: number; code?: string };
+      sendError(response, failure.status ?? 400, failure.code ?? "BAD_REQUEST", failure.message);
+      return;
+    }
+    const parsed = GuideImageAnalysisRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      sendError(response, 422, "VALIDATION_ERROR", "魚種、工程、JPEG画像を確認してください。");
+      return;
+    }
+    const guide = getReferenceGuide(parsed.data.fishId, "edible_portion");
+    const step = guide?.steps.find((candidate) => candidate.id === parsed.data.stepId);
+    if (!guide || !step) {
+      sendError(response, 422, "GUIDE_STEP_NOT_FOUND", "選択中の魚種と工程を確認してください。");
+      return;
+    }
+    const imageBytes = Buffer.from(parsed.data.imageData.slice(parsed.data.imageData.indexOf(",") + 1), "base64");
+    if (imageBytes.byteLength > MAX_ANALYSIS_IMAGE_BYTES) {
+      sendError(response, 413, "IMAGE_TOO_LARGE", "画像サイズは2 MiB以下にしてください。");
+      return;
+    }
+    try {
+      const result = await analyzeGuideImage({
+        apiKey: process.env.GEMINI_API_KEY,
+        model: process.env.GEMINI_MODEL,
+        fishId: parsed.data.fishId,
+        step,
+        imageData: parsed.data.imageData,
+      });
+      sendJson(response, 200, result);
+    } catch (error) {
+      if (error instanceof GeminiRequestError) {
+        sendError(response, error.status, error.code, error.message);
+        return;
+      }
+      sendError(response, 502, "GEMINI_UPSTREAM_ERROR", "Gemini APIから応答を取得できませんでした。");
+    }
+    return;
+  }
 
   const sessionMatch = pathname.match(/^\/api\/guide\/sessions\/([0-9a-f-]{36})$/i);
   const advanceMatch = pathname.match(/^\/api\/guide\/sessions\/([0-9a-f-]{36})\/advance$/i);
@@ -262,7 +316,7 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
     return;
   }
 
-  const postOnlySessionPath = pathname === "/api/guide/sessions" || advanceMatch !== null;
+  const postOnlySessionPath = pathname === "/api/guide/sessions" || pathname === "/api/guide/analyze" || advanceMatch !== null;
   if (postOnlySessionPath && request.method !== "POST") {
     response.setHeader("Allow", "POST");
     sendError(response, 405, "METHOD_NOT_ALLOWED", "このHTTPメソッドには対応していません。");
@@ -274,6 +328,7 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
     const supportedPath = [
       "/api/health",
       "/api/guide",
+      "/api/guide/analyze",
       "/api/model/status",
       "/api/config/orientation",
       "/api/catalog",
@@ -285,6 +340,8 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
     }
     const allow = pathname === "/api/guide"
       ? "GET, POST"
+      : pathname === "/api/guide/analyze"
+        ? "POST"
       : pathname === "/api/guide/sessions" || advanceMatch
         ? "POST"
         : "GET";
