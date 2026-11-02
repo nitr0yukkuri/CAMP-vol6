@@ -1340,12 +1340,8 @@ function App() {
             <div className="orientation-main">
               <RotatePhoneIcon />
               <h1>画面を横に<br />してください</h1>
-              <span className="orientation-fish">{chosenFish}</span>
             </div>
             {cameraMessage ? <p className="orientation-message" role="status">{cameraMessage}</p> : null}
-            {cameraStatus === "active" ? (
-              <button className="camera-stop" type="button" onClick={stopCamera} aria-label="カメラを停止"><CameraStopIcon /></button>
-            ) : null}
           </div>
 
           <div className="landscape-screen">

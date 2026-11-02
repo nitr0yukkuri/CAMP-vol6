@@ -310,13 +310,10 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .orientation-main > svg { width: 112px; height: 101px; margin: 4px 0 17px; color: var(--card); }
 .orientation-main h1 { margin: 0; color: var(--card); font-size: clamp(25px, 7vw, 31px); font-weight: 800; line-height: 1.3; letter-spacing: .03em; }
 .orientation-main > p { margin: 15px 0 0; color: rgba(255, 250, 242, .76); font-size: 11px; line-height: 1.7; }
-.orientation-fish { min-width: 170px; margin-top: 30px; padding: 10px 22px; border: 1px solid rgba(255, 250, 242, .2); border-radius: 30px; color: var(--card); background: var(--deep-soft); font-size: 11px; font-weight: 600; }
 .orientation-main > p.orientation-hint { margin-top: 25px; color: rgba(255, 250, 242, .66); font-size: 10px; }
 .orientation-message { align-self: center; max-width: 450px; margin: 0 0 12px; color: var(--gold); font-size: 11px; line-height: 1.6; text-align: center; }
 .orientation-back { display: inline-flex; min-height: 36px; flex: 0 0 auto; align-items: center; gap: 7px; padding: 0 11px; border: 1px solid rgba(255, 250, 242, .28); border-radius: 999px; color: var(--on-dark); background: rgba(255, 255, 255, .08); font-size: 11px; font-weight: 600; white-space: nowrap; cursor: pointer; }
 .orientation-back > span:first-child { font-size: 19px; line-height: 1; }
-.camera-stop { align-self: center; padding: 8px 13px; border: 0; color: rgba(255, 250, 242, .78); background: transparent; font-size: 10px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
-.camera-stop { display: grid; width: 34px; height: 34px; margin-top: 3px; padding: 0; place-items: center; border: 1px solid rgba(255, 250, 242, .3); border-radius: 8px; color: rgba(255, 250, 242, .8); text-decoration: none; }
 
 @media (orientation: landscape) and (max-height: 560px) and (max-width: 1024px) {
   .selector-screen {
