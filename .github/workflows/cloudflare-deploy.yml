@@ -5,6 +5,7 @@ on:
     branches:
       - main
     paths:
+      # ワークフロー定義の変更も、マージ後のデプロイ検証対象に含める
       - .github/workflows/cloudflare-deploy.yml
       - C/src/orewosabake/apps/web/**
       - C/src/orewosabake/packages/contracts/**
