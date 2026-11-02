@@ -72,7 +72,7 @@ GitHubリポジトリの **Settings → Secrets and variables → Actions** に�
 APIトークンはCloudflareの「Edit Cloudflare Workers」権限を選び、対象アカウントに限定してください。トークンをソースコードやGitHub Actionsのログに書かないでください。
 アカウントIDとAPIトークンの作成方法は[Cloudflare公式のGitHub Actions手順](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)を参照してください。
 
-**モデルの受け渡しも必要です。** `head-tail.tflite` はGit管理対象外なので、ワークフローは同じGitHubリポジトリのReleaseから取得し、登録されたSHA-256と照合します。Releaseを作成し、`head-tail.tflite` という名前でモデルを添付したうえで、GitHubの **Settings → Secrets and variables → Actions → Variables** に次を登録してください。
+**モデルの受け渡しも必要です。** `head-tail.tflite` はGit管理対象外なので、ワークフローは同じGitHubリポジトリのReleaseから `head-tail-model.zip` を取得します。ZIPにはルート直下に `head-tail.tflite` だけを入れてください。GitHubの **Settings → Secrets and variables → Actions → Variables** に次を登録します。`HEAD_TAIL_MODEL_SHA256` はZIPではなく、展開後のTFLiteファイルのSHA-256です。
 
 | Variable | 値 |
 | --- | --- |
@@ -85,7 +85,7 @@ Windowsでは、モデルのSHA-256を次のコマンドで確認できます。
 Get-FileHash .\apps\web\public\models\head-tail.tflite -Algorithm SHA256
 ```
 
-Releaseアセットのチェックサムが一致しない場合、TFLite形式でない場合、または25 MiB以上の場合は公開を止めます。モデルはサイトから配信される公開アセットなので、Releaseにも公開されます。GitHub Secretにモデル本体を入れる必要はありません。
+ZIPが破損している、ルート直下に `head-tail.tflite` 以外のファイルを含む、展開後のモデルが25 MiB以上、またはモデルのSHA-256が一致しない場合は公開を止めます。モデルはサイトから配信される公開アセットなので、Releaseにも公開されます。GitHub Secretにモデル本体を入れる必要はありません。
 
 工程判定用モデルは別途任意の魚種別ファイルです。未配置でも頭・尾のモデルがあればサイトを公開でき、画面は工程判定を利用不可として扱います。
 
