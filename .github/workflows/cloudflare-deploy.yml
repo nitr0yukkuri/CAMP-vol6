@@ -66,14 +66,42 @@ jobs:
           fi
 
           model_path="apps/web/public/models/head-tail.tflite"
-          model_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${MODEL_RELEASE_TAG}/head-tail.tflite"
+          model_archive_path="$(mktemp)"
+          model_staging_path="${model_path}.download"
+          model_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${MODEL_RELEASE_TAG}/head-tail-model.zip"
           mkdir -p "$(dirname "$model_path")"
-          curl --fail --location --silent --show-error --retry 3 --retry-delay 2 --max-time 180 --max-filesize 26214399 "$model_url" --output "$model_path"
-          if ! printf '%s  %s\n' "$MODEL_SHA256" "$model_path" | sha256sum --check --status; then
-            rm -f "$model_path"
-            echo "::error title=モデルのチェックサムが不一致::Releaseのhead-tail.tfliteとHEAD_TAIL_MODEL_SHA256を確認してください。"
+          trap 'rm -f "$model_archive_path" "$model_staging_path"' EXIT
+          curl --fail --location --silent --show-error --retry 3 --retry-delay 2 --max-time 180 --max-filesize 26214399 "$model_url" --output "$model_archive_path"
+          if ! python - "$model_archive_path" "$model_staging_path" <<'PY'
+          import pathlib
+          import shutil
+          import sys
+          import zipfile
+
+          archive_path = pathlib.Path(sys.argv[1])
+          model_path = pathlib.Path(sys.argv[2])
+          try:
+              with zipfile.ZipFile(archive_path) as archive:
+                  entries = archive.infolist()
+                  if len(entries) != 1 or entries[0].filename != "head-tail.tflite":
+                      raise ValueError("ZIP must contain only root-level head-tail.tflite")
+                  if entries[0].file_size > 25 * 1024 * 1024:
+                      raise ValueError("TFLite model exceeds 25 MiB")
+                  with archive.open(entries[0]) as source, model_path.open("wb") as destination:
+                      shutil.copyfileobj(source, destination)
+          except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as error:
+              print(f"Invalid model ZIP: {error}", file=sys.stderr)
+              sys.exit(1)
+          PY
+          then
+            echo "::error title=モデルZIPが不正::Releaseのhead-tail-model.zipにはhead-tail.tfliteを1つだけ含めてください。"
             exit 1
           fi
+          if ! printf '%s  %s\n' "$MODEL_SHA256" "$model_staging_path" | sha256sum --check --status; then
+            echo "::error title=モデルのチェックサムが不一致::ZIPから展開したhead-tail.tfliteとHEAD_TAIL_MODEL_SHA256を確認してください。"
+            exit 1
+          fi
+          mv "$model_staging_path" "$model_path"
 
       - name: Node.jsを設定
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
