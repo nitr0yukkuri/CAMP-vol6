@@ -48,7 +48,7 @@ export async function analyzeGuideImage(options: {
     "不鮮明、隠れている、画角外など判断できない場合は certainty を uncertain にし、推測しないでください。",
     `魚種ID: ${options.fishId}`,
     `確認中の工程: ${options.step.title}`,
-    `確認済みガイドの説明: ${options.step.description}`,
+    `表示中の参考ガイドの説明: ${options.step.description}`,
     "visibleParts は画像内にはっきり見える head/body/tail だけを含めてください。evidence は画像上で見えることと工程説明との関係、caution は必要な場合の短い注意です。",
   ].join("\n");
 
