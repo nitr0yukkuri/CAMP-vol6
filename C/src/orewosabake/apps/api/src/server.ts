@@ -108,7 +108,7 @@ function validationDetails(issues: Array<{ code: string; path: PropertyKey[] }>)
       : field === "fishId"
         ? "魚種はカタログにある候補から選んでください。"
         : field === "preparationId"
-          ? "目的は「三枚おろし」を指定してください。"
+          ? "目的は「可食部を骨から外す」を指定してください。"
           : field === "fishName"
             ? "魚の名前を入力してください。"
             : field === "fishCategory"
