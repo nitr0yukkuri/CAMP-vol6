@@ -160,8 +160,11 @@ async function createGuideSession(requestBody: GuideRequest, signal: AbortSignal
   const contentType = response.headers.get("content-type") ?? "";
   if (!response.ok) {
     const payload = contentType.includes("application/json")
-      ? await response.clone().json().catch(() => null) as { error?: { code?: string } } | null
+      ? await response.clone().json().catch(() => null) as { error?: { code?: string; message?: string } } | null
       : null;
+    if (payload?.error?.code === "GUIDE_NOT_AVAILABLE") {
+      throw new GuideNotAvailableError(payload.error.message ?? "この魚の参考手順はまだ登録されていません。");
+    }
     const apiRouteMissing = response.status === 404 || response.status === 405;
     if (apiRouteMissing && (!payload?.error?.code || ["NOT_FOUND", "METHOD_NOT_ALLOWED"].includes(payload.error.code))) {
       throw new GuideApiUnavailableError();
@@ -173,6 +176,7 @@ async function createGuideSession(requestBody: GuideRequest, signal: AbortSignal
 }
 
 class GuideApiUnavailableError extends Error {}
+class GuideNotAvailableError extends Error {}
 
 function createLocalGuideSession(requestBody: GuideRequest): GuideSession {
   const guide = getReferenceGuide(requestBody.fishId, requestBody.preparationId);
@@ -541,6 +545,8 @@ function App() {
           } catch {
             setGuideMessage("魚種別の参考手順を準備できませんでした。魚を選び直してください。");
           }
+        } else if (!guideController.signal.aborted && error instanceof GuideNotAvailableError) {
+          setGuideMessage(error.message);
         } else if (!guideController.signal.aborted) {
           setGuideMessage("参考手順を読み込めませんでした。通信状態を確認して、魚を選び直してください。");
         }
