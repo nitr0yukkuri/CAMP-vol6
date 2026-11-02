@@ -72,6 +72,7 @@ type GeminiAutoDetectionWatch = {
   lastTriggeredAt: number;
   retryCount: number;
   retryAtMs: number;
+  pendingObservationAtMs: number | null;
 };
 
 function createGeminiAutoDetectionWatch(): GeminiAutoDetectionWatch {
@@ -85,6 +86,7 @@ function createGeminiAutoDetectionWatch(): GeminiAutoDetectionWatch {
     lastTriggeredAt: 0,
     retryCount: 0,
     retryAtMs: 0,
+    pendingObservationAtMs: null,
   };
 }
 
@@ -1083,7 +1085,7 @@ function App() {
     }
   }
 
-  async function analyzeCurrentCameraImage(): Promise<boolean> {
+  async function analyzeCurrentCameraImage(isAutomatic = false): Promise<boolean> {
     if (geminiAnalysis.loading || guideAdvancing || guideSessionLoading) return false;
     if (!guideSession || !currentStep || !selectedGuideFishId || !videoRef.current || cameraStatus !== "active") {
       setGeminiAnalysis({ loading: false, error: "カメラ映像と現在の工程を確認してください。" });
@@ -1096,6 +1098,7 @@ function App() {
     }
     const requestId = ++geminiAnalysisRequestId.current;
     setGeminiAnalysis({ loading: true });
+    const frameCapturedAtMs = Date.now();
     try {
       const frame = await captureCurrentFrame(videoRef.current);
       if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return false;
@@ -1105,6 +1108,17 @@ function App() {
       const result = await analyzeGuideImage({ fishId: selectedGuideFishId, stepId: currentStep.id, imageData }, signal);
       if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return false;
       setGeminiAnalysis({ loading: false, result });
+      if (!isAutomatic) {
+        const watch = geminiAutoDetectionWatch.current;
+        if (watch.pending && watch.pendingObservationAtMs !== null && watch.pendingObservationAtMs <= frameCapturedAtMs) {
+          watch.pending = false;
+          watch.pendingObservationAtMs = null;
+          watch.retryCount = 0;
+          watch.retryAtMs = 0;
+          setGeminiAutoPending(false);
+          setGeminiAutoCooldownTick((tick) => tick + 1);
+        }
+      }
       return true;
     } catch (error) {
       if (!signal.aborted && requestId === geminiAnalysisRequestId.current) setGeminiAnalysis({ loading: false, error: error instanceof Error ? error.message : "画像をAIで確認できませんでした。" });
@@ -1113,7 +1127,7 @@ function App() {
   }
 
   useEffect(() => {
-    geminiAutoAnalyzerRef.current = analyzeCurrentCameraImage;
+    geminiAutoAnalyzerRef.current = () => analyzeCurrentCameraImage(true);
   });
 
   useEffect(() => {
@@ -1197,6 +1211,7 @@ function App() {
     if (watch.retryAtMs > 0) setGeminiAutoCooldownTick((tick) => tick + 1);
     watch.retryCount = 0;
     watch.retryAtMs = 0;
+    watch.pendingObservationAtMs = capturedAtMs;
     watch.pending = true;
     setGeminiAutoPending(true);
   }, [
@@ -1244,6 +1259,7 @@ function App() {
       if (succeeded) {
         watch.retryCount = 0;
         watch.retryAtMs = 0;
+        if (!watch.pending) watch.pendingObservationAtMs = null;
         return;
       }
 
