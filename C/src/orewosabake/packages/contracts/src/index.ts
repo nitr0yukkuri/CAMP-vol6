@@ -28,7 +28,7 @@ export const GuideSchema = z.object({
   title: z.string(),
   steps: z.array(GuideStepSchema).min(1),
   scope: z.literal("edible_portion").default("edible_portion"),
-  completionMessage: z.string().default("可食部を骨から外す工程はここまでです。以降の切り分けや調理はガイド対象外です。"),
+  completionMessage: z.string().default("この魚介の可食部を取り分ける工程はここまでです。以降の切り分けや調理はガイド対象外です。"),
   // Keep the legacy default so sessions created before source metadata was added still parse.
   source: z.enum(["mock", "public_reference"]).default("mock"),
   sourceLabel: z.string().optional(),
@@ -467,8 +467,8 @@ const PREPARATION_BY_FISH: Record<GuideRequest["fishId"], GuideRequest["preparat
   other_finfish: "three_piece_fillet",
 };
 
-// A guide is served only through the step that reaches separated edible flesh.
-// Tuna saku and whole-grilled ayu procedures do not guide bone removal.
+// Only map species whose sources provide a complete, user-performable edible-portion guide.
+// Tuna and ayu do not match the goal; crab and prepared eel-family guides stop before extraction.
 const EDIBLE_PORTION_STOP_STEP_BY_FISH: Partial<Record<GuideRequest["fishId"], string>> = {
   salmon: "salmon_bones",
   hamachi: "hamachi_check",
@@ -476,7 +476,6 @@ const EDIBLE_PORTION_STOP_STEP_BY_FISH: Partial<Record<GuideRequest["fishId"], s
   saba: "saba_bones",
   tai: "tai_trim",
   ebi: "ebi_wash",
-  kani: "kani_legs",
   ika: "ika_check",
   tako: "tako_clean",
   iwashi: "iwashi_finish",
@@ -484,16 +483,13 @@ const EDIBLE_PORTION_STOP_STEP_BY_FISH: Partial<Record<GuideRequest["fishId"], s
   katsuo: "katsuo_check",
   hirame: "hirame_check",
   karei: "karei_check",
-  unagi: "unagi_bone",
-  anago: "anago_bone",
-  hamo: "hamo_check",
   tachiuo: "tachiuo_check",
   kawahagi: "kawahagi_check",
   other_finfish: "other_finfish_check",
 };
 
-export function getPreparationIdForFish(fishId: GuideRequest["fishId"]): GuideRequest["preparationId"] {
-  return PREPARATION_BY_FISH[fishId];
+export function getPreparationIdForFish(_fishId: GuideRequest["fishId"]): GuideRequest["preparationId"] {
+  return "edible_portion";
 }
 
 export function getReferenceGuide(
@@ -562,7 +558,7 @@ export const CATALOG: Catalog = CatalogSchema.parse({
     { id: "tai", name: "鯛", guideAvailable: true },
     { id: "ayu", name: "鮎", guideAvailable: false },
     { id: "ebi", name: "エビ", guideAvailable: true },
-    { id: "kani", name: "カニ", guideAvailable: true },
+    { id: "kani", name: "カニ", guideAvailable: false },
     { id: "ika", name: "イカ", guideAvailable: true },
     { id: "tako", name: "タコ", guideAvailable: true },
     { id: "iwashi", name: "イワシ", guideAvailable: true },
@@ -570,15 +566,15 @@ export const CATALOG: Catalog = CatalogSchema.parse({
     { id: "katsuo", name: "カツオ", guideAvailable: true },
     { id: "hirame", name: "ヒラメ", guideAvailable: true },
     { id: "karei", name: "カレイ", guideAvailable: true },
-    { id: "unagi", name: "ウナギ", guideAvailable: true },
-    { id: "anago", name: "アナゴ", guideAvailable: true },
-    { id: "hamo", name: "はも", guideAvailable: true },
+    { id: "unagi", name: "ウナギ", guideAvailable: false },
+    { id: "anago", name: "アナゴ", guideAvailable: false },
+    { id: "hamo", name: "はも", guideAvailable: false },
     { id: "tachiuo", name: "太刀魚", guideAvailable: true },
     { id: "kawahagi", name: "カワハギ", guideAvailable: true },
     { id: "other_finfish", name: "その他の魚", guideAvailable: true },
   ],
   preparations: [
-    { id: "edible_portion", name: "可食部を骨から外す" },
+    { id: "edible_portion", name: "可食部を取り分ける" },
   ],
   guideAvailability: "partial",
 });
