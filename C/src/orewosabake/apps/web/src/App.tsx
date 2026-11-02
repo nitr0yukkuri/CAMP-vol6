@@ -400,7 +400,7 @@ function App() {
   const [guideMessage, setGuideMessage] = useState("");
   const [geminiAnalysis, setGeminiAnalysis] = useState<{ loading: boolean; result?: GuideImageAnalysisResponse; error?: string }>({ loading: false });
   const [guideAdvancing, setGuideAdvancing] = useState(false);
-  const [activeStep, setActiveStep] = useState(0);
+  const [activeStep, setActiveStepState] = useState(0);
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("idle");
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [cameraMessage, setCameraMessage] = useState("");
@@ -429,6 +429,7 @@ function App() {
   const cameraRequestId = useRef(0);
   const guideRequestController = useRef<AbortController | null>(null);
   const guideAdvanceInFlight = useRef(false);
+  const geminiAnalysisRequestId = useRef(0);
   const detectionFishName = selectedFish === "その他" ? search.trim() || "ほかの魚" : selectedFish;
   const detectionFishId = screen === "guide" ? resolveGuideFishId(detectionFishName) ?? null : null;
   const headTailDetection = useHeadTailDetection(
@@ -535,7 +536,13 @@ function App() {
     : undefined;
   const fishCanContinue = selectedFish !== "その他" || search.trim().length > 0;
 
+  function setActiveStep(nextStep: number | ((previousStep: number) => number)) {
+    geminiAnalysisRequestId.current += 1;
+    setActiveStepState(nextStep);
+  }
+
   useEffect(() => {
+    geminiAnalysisRequestId.current += 1;
     setGeminiAnalysis({ loading: false });
   }, [currentStep?.id]);
 
@@ -1035,14 +1042,17 @@ function App() {
       setGeminiAnalysis({ loading: false, error: "ガイドを開始し直してください。" });
       return;
     }
+    const requestId = ++geminiAnalysisRequestId.current;
     setGeminiAnalysis({ loading: true });
     try {
       const frame = await captureCurrentFrame(videoRef.current);
+      if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return;
       const imageData = await blobToDataUrl(frame.blob);
+      if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return;
       const result = await analyzeGuideImage({ fishId: selectedGuideFishId, stepId: currentStep.id, imageData }, signal);
-      if (!signal.aborted) setGeminiAnalysis({ loading: false, result });
+      if (!signal.aborted && requestId === geminiAnalysisRequestId.current) setGeminiAnalysis({ loading: false, result });
     } catch (error) {
-      if (!signal.aborted) setGeminiAnalysis({ loading: false, error: error instanceof Error ? error.message : "画像をAIで確認できませんでした。" });
+      if (!signal.aborted && requestId === geminiAnalysisRequestId.current) setGeminiAnalysis({ loading: false, error: error instanceof Error ? error.message : "画像をAIで確認できませんでした。" });
     }
   }
 
