@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { AdvanceGuideStepRequestSchema, getPreparationIdForFish, getReferenceGuide, GuideRequestSchema, GuideSessionSchema, resolveGuideFishId, type GuideRequest, type GuideSession, type Observation } from "@orewosabake/contracts";
+import { AdvanceGuideStepRequestSchema, CATALOG, getPreparationIdForFish, getReferenceGuide, GuideRequestSchema, GuideSessionSchema, resolveGuideFishId, type GuideRequest, type GuideSession, type Observation } from "@orewosabake/contracts";
 import { useHeadTailDetection, type HeadTailDetectionStatus } from "./hooks/useHeadTailDetection";
 import { fishStageLabel, stageToExpectedFishState } from "./model/fishStage";
 
@@ -484,6 +484,9 @@ function App() {
   const selectedFishVisualData = selectedFishData ?? (selectedFish === "その他" ? genericFishVisualData : undefined);
   const knownGuideFishId = resolveGuideFishId(chosenFish);
   const selectedGuideFishId = knownGuideFishId ?? (selectedFish === "その他" ? "other_finfish" : undefined);
+  const selectedGuideFishAvailable = selectedGuideFishId
+    ? CATALOG.fish.find((fish) => fish.id === selectedGuideFishId)?.guideAvailable === true
+    : false;
   const stageCaptureSupported = knownGuideFishId !== undefined
     && ["aji", "saba", "tai", "hamachi"].includes(knownGuideFishId);
   const guide = guideSession?.guide;
@@ -505,6 +508,7 @@ function App() {
   }
 
   function startGuide() {
+    if (!selectedGuideFishId || !selectedGuideFishAvailable) return;
     setScreen("guide");
     setActiveStep(0);
     setGuideSession(null);
@@ -1089,9 +1093,9 @@ function App() {
               {matchingFish.length === 0 && !search ? <p className="empty-fish">このカテゴリの魚は準備中です。</p> : null}
             </div>
 
-            <button className="start-button" type="button" onClick={() => void startGuide()}>
+            <button className="start-button" type="button" disabled={!selectedGuideFishId || !selectedGuideFishAvailable} onClick={() => void startGuide()}>
               <strong>俺を捌け！</strong>
-              <span>{selectedGuideFishId === "other_finfish" ? "基本の三枚おろしで進む" : selectedGuideFishId ? "この魚を捌く" : "この魚の手順は準備中"}</span>
+              <span>{selectedGuideFishId === "other_finfish" ? "基本の三枚おろしで進む" : selectedGuideFishId && !selectedGuideFishAvailable ? "この魚のガイドは未対応" : selectedGuideFishId ? "この魚を捌く" : "この魚の手順は準備中"}</span>
             </button>
             <button className="capture-entry-button" type="button" disabled={!fishCanContinue} onClick={startCapture}>
               研究用データを撮る
