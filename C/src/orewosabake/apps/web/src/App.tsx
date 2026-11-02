@@ -296,11 +296,15 @@ function HelpButton({ onClick, light = false }: { onClick: () => void; light?: b
 
 function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
+    if (open && !dialog.open) {
+      dialog.showModal();
+      titleRef.current?.focus({ preventScroll: true });
+    }
     else if (!open && dialog.open) dialog.close();
   }, [open]);
 
@@ -321,31 +325,30 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
       <section className="help-dialog-card">
         <header className="help-dialog-heading">
           <div>
-            <span>はじめに</span>
-            <h2 id="help-dialog-title">この作品の使い方</h2>
+            <h2 ref={titleRef} id="help-dialog-title" tabIndex={-1}>使い方</h2>
           </div>
-          <button className="help-dialog-close" type="button" aria-label="ヘルプを閉じる" autoFocus onClick={() => dialogRef.current?.close()}>
+          <button className="help-dialog-close" type="button" aria-label="ヘルプを閉じる" onClick={() => dialogRef.current?.close()}>
             ×
           </button>
         </header>
-        <p className="help-dialog-lead">魚を選び、カメラの横で参考手順を見ながら、自分で確認して進めるガイドです。</p>
+        <p className="help-dialog-lead">魚を選び、カメラの横で手順を確認しながら、自分で進めます。</p>
 
         <ol className="help-flow">
           <li>
             <span>1</span>
-            <div><strong>魚を選ぶ</strong><p>一覧の21種類それぞれに合わせた参考手順を見られます。種類が分からない魚は、購入店に確認してね。</p></div>
+            <div><strong>魚を選ぶ</strong><p>21種類から選びます。迷ったら、購入店に確認してください。</p></div>
           </li>
           <li>
             <span>2</span>
-            <div><strong>「俺を捌け！」を押す</strong><p>iPhoneを縦に持っているときは、表示に従って横向きにします。</p></div>
+            <div><strong>ガイドを始める</strong><p>「俺を捌け！」を押し、画面の案内に沿って横向きにします。</p></div>
           </li>
           <li>
             <span>3</span>
-            <div><strong>カメラを起動して、手順を読む</strong><p>カメラの使用を許可すると映像が表示されます。各手順を確認して、自分で「次の工程へ」を押します。画面を閉じると進行はリセットされます。</p></div>
+            <div><strong>手順を確認して進む</strong><p>カメラを許可して手順を確認。内容を確かめたら「次の工程へ」を押します。閉じると最初からです。</p></div>
           </li>
         </ol>
 
-        <p className="help-privacy-note">通常のガイドでは、カメラ映像は端末内で処理され、サーバーへ送られません。参考手順は公開資料の要約で、調理経験者の確認前です。「研究用データを撮る」は任意の検証機能で、撮影画像は端末に保存します。</p>
+        <p className="help-privacy-note">カメラ映像は端末内で処理し、送信しません。手順は公開資料を参考にした未確認の案内です。安全を優先してください。</p>
         <footer className="help-dialog-footer">
           <button type="button" onClick={() => dialogRef.current?.close()}>OK</button>
         </footer>
