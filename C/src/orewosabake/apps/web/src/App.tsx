@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { AdvanceGuideStepRequestSchema, getPreparationIdForFish, getReferenceGuide, GuideRequestSchema, GuideSessionSchema, resolveGuideFishId, type GuideRequest, type GuideSession, type Observation } from "@orewosabake/contracts";
+import { AdvanceGuideStepRequestSchema, getPreparationIdForFish, getReferenceGuide, GuideImageAnalysisResponseSchema, GuideRequestSchema, GuideSessionSchema, resolveGuideFishId, type GuideImageAnalysisResponse, type GuideRequest, type GuideSession, type Observation } from "@orewosabake/contracts";
 import { useHeadTailDetection, type HeadTailDetectionStatus } from "./hooks/useHeadTailDetection";
 import { fishStageLabel, stageToExpectedFishState } from "./model/fishStage";
 
@@ -173,6 +173,33 @@ async function createGuideSession(requestBody: GuideRequest, signal: AbortSignal
   }
   if (!contentType.includes("application/json")) throw new GuideApiUnavailableError();
   return GuideSessionSchema.parse(await response.json());
+}
+
+async function analyzeGuideImage(
+  requestBody: { fishId: GuideRequest["fishId"]; stepId: string; imageData: string },
+  signal: AbortSignal,
+): Promise<GuideImageAnalysisResponse> {
+  const response = await fetch("/api/guide/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(requestBody),
+    signal,
+  });
+  const payload = await response.json().catch(() => null) as { error?: { message?: string } } | GuideImageAnalysisResponse | null;
+  if (!response.ok) {
+    const message = payload && "error" in payload ? payload.error?.message : undefined;
+    throw new Error(message || "画像をAIで確認できませんでした。時間をおいて再試行してください。");
+  }
+  return GuideImageAnalysisResponseSchema.parse(payload);
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("画像を読み込めませんでした。"));
+    reader.onerror = () => reject(new Error("画像を読み込めませんでした。"));
+    reader.readAsDataURL(blob);
+  });
 }
 
 class GuideApiUnavailableError extends Error {}
@@ -352,7 +379,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
           </li>
         </ol>
 
-        <p className="help-privacy-note">カメラ映像は端末内で処理し、送信しません。手順は公開資料を参考にした未確認の案内です。安全を優先してください。</p>
+        <p className="help-privacy-note">カメラ映像は端末内で表示します。「この画像をGeminiで確認」を押した場合だけ、静止画をAPI経由でGoogle Geminiへ送信します。手順は公開資料を参考にした未確認の案内です。安全を優先してください。</p>
         <footer className="help-dialog-footer">
           <button type="button" onClick={() => dialogRef.current?.close()}>OK</button>
         </footer>
@@ -371,8 +398,9 @@ function App() {
   const [guideSessionMode, setGuideSessionMode] = useState<GuideSessionMode>("worker");
   const [guideSessionLoading, setGuideSessionLoading] = useState(false);
   const [guideMessage, setGuideMessage] = useState("");
+  const [geminiAnalysis, setGeminiAnalysis] = useState<{ loading: boolean; result?: GuideImageAnalysisResponse; error?: string }>({ loading: false });
   const [guideAdvancing, setGuideAdvancing] = useState(false);
-  const [activeStep, setActiveStep] = useState(0);
+  const [activeStep, setActiveStepState] = useState(0);
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("idle");
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [cameraMessage, setCameraMessage] = useState("");
@@ -401,6 +429,7 @@ function App() {
   const cameraRequestId = useRef(0);
   const guideRequestController = useRef<AbortController | null>(null);
   const guideAdvanceInFlight = useRef(false);
+  const geminiAnalysisRequestId = useRef(0);
   const detectionFishName = selectedFish === "その他" ? search.trim() || "ほかの魚" : selectedFish;
   const detectionFishId = screen === "guide" ? resolveGuideFishId(detectionFishName) ?? null : null;
   const headTailDetection = useHeadTailDetection(
@@ -507,6 +536,16 @@ function App() {
     : undefined;
   const fishCanContinue = selectedFish !== "その他" || search.trim().length > 0;
 
+  function setActiveStep(nextStep: number | ((previousStep: number) => number)) {
+    geminiAnalysisRequestId.current += 1;
+    setActiveStepState(nextStep);
+  }
+
+  useEffect(() => {
+    geminiAnalysisRequestId.current += 1;
+    setGeminiAnalysis({ loading: false });
+  }, [currentStep?.id]);
+
   function closeHelp() {
     setHelpOpen(false);
   }
@@ -518,6 +557,7 @@ function App() {
     setGuideSessionMode("worker");
     setGuideSessionLoading(false);
     setGuideMessage("");
+    setGeminiAnalysis({ loading: false });
     setCameraMessage("");
 
     guideRequestController.current?.abort();
@@ -992,6 +1032,30 @@ function App() {
     }
   }
 
+  async function analyzeCurrentCameraImage() {
+    if (!guideSession || !currentStep || !selectedGuideFishId || !videoRef.current || cameraStatus !== "active") {
+      setGeminiAnalysis({ loading: false, error: "カメラ映像と現在の工程を確認してください。" });
+      return;
+    }
+    const signal = guideRequestController.current?.signal;
+    if (!signal || signal.aborted) {
+      setGeminiAnalysis({ loading: false, error: "ガイドを開始し直してください。" });
+      return;
+    }
+    const requestId = ++geminiAnalysisRequestId.current;
+    setGeminiAnalysis({ loading: true });
+    try {
+      const frame = await captureCurrentFrame(videoRef.current);
+      if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return;
+      const imageData = await blobToDataUrl(frame.blob);
+      if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return;
+      const result = await analyzeGuideImage({ fishId: selectedGuideFishId, stepId: currentStep.id, imageData }, signal);
+      if (!signal.aborted && requestId === geminiAnalysisRequestId.current) setGeminiAnalysis({ loading: false, result });
+    } catch (error) {
+      if (!signal.aborted && requestId === geminiAnalysisRequestId.current) setGeminiAnalysis({ loading: false, error: error instanceof Error ? error.message : "画像をAIで確認できませんでした。" });
+    }
+  }
+
   const detectionTitle = headTailDetection.status === "active"
     ? "MediaPipe試験モデルで頭・尾を確認中"
     : headTailDetection.status === "loading"
@@ -1298,7 +1362,7 @@ function App() {
             <div className="guide-layout">
               <div className="guide-stage">
                 <section className="camera-card" aria-label="カメラプレビュー">
-                  <div className="camera-topline"><span>カメラプレビュー</span><span>映像は送信されません</span></div>
+                  <div className="camera-topline"><span>カメラプレビュー</span><span>確認ボタンで静止画をGeminiへ送信</span></div>
                   {cameraStream ? (
                     <video ref={videoRef} autoPlay muted playsInline aria-label="カメラ映像" />
                   ) : (
@@ -1335,6 +1399,21 @@ function App() {
                     <h2>{currentStep.title}</h2>
                     <p>{currentStep.description}</p>
                     {guideMessage ? <p className="guide-message" role="status">{guideMessage}</p> : null}
+                    <div className="gemini-guide-check">
+                      <button type="button" onClick={() => void analyzeCurrentCameraImage()} disabled={cameraStatus !== "active" || geminiAnalysis.loading || guideSessionLoading || guideAdvancing}>
+                        {geminiAnalysis.loading ? "Geminiが画像を確認中…" : "この画像をGeminiで確認"}
+                      </button>
+                      <small>押した時点の静止画だけを送ります。AIは工程を進めません。</small>
+                      {geminiAnalysis.result ? (
+                        <div className="gemini-guide-result" data-certainty={geminiAnalysis.result.certainty} role="status">
+                          <strong>{geminiAnalysis.result.certainty === "observed" ? "画像で見えたこと" : "画像だけでは判断できません"}</strong>
+                          <span>{geminiAnalysis.result.evidence}</span>
+                          {geminiAnalysis.result.visibleParts.length ? <span>見えている部分：{geminiAnalysis.result.visibleParts.join("・")}</span> : null}
+                          {geminiAnalysis.result.caution ? <span>{geminiAnalysis.result.caution}</span> : null}
+                        </div>
+                      ) : null}
+                      {geminiAnalysis.error ? <p className="guide-message" role="alert">{geminiAnalysis.error}</p> : null}
+                    </div>
                   </div>
                 ) : (
                   <div className="guide-step guide-empty-state" aria-live="polite">

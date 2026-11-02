@@ -3,6 +3,8 @@ import {
   AdvanceGuideStepRequestSchema,
   CATALOG,
   GuideContextRequestSchema,
+  GuideImageAnalysisRequestSchema,
+  GuideImageAnalysisResponseSchema,
   GuideRequestSchema,
   GuideSessionSchema,
   getReferenceGuide,
@@ -13,8 +15,13 @@ import {
   ORIENTATION_CONFIG,
   type GuideSession,
 } from "@orewosabake/contracts";
+import type { GuideImageAnalysisResponse } from "@orewosabake/contracts";
 
 const maxBodyBytes = 16 * 1024;
+const maxAnalysisBodyBytes = 2_950_000;
+const maxAnalysisImageBytes = 2_000_000;
+const analysisRateLimitCount = 10;
+const analysisRateLimitWindowMs = 60_000;
 const maxGuideSessions = 500;
 const guideSessionTtlMs = 30 * 60 * 1000;
 const sessionCreationBucketCapacity = 10;
@@ -23,6 +30,8 @@ const sessionCreationLimitRetentionMs = sessionCreationBucketCapacity * sessionC
 
 interface Env {
   GUIDE_SESSIONS: DurableObjectNamespace<GuideSessionStore>;
+  GEMINI_API_KEY?: string;
+  GEMINI_MODEL?: string;
 }
 
 class RequestError extends Error {
@@ -39,6 +48,35 @@ export default {
 
     const sessionMatch = pathname.match(/^\/api\/guide\/sessions\/([0-9a-f-]{36})$/i);
     const advanceMatch = pathname.match(/^\/api\/guide\/sessions\/([0-9a-f-]{36})\/advance$/i);
+
+    if (pathname === "/api/guide/analyze" && request.method === "POST") {
+      const body = await readRequestBody(request, maxAnalysisBodyBytes);
+      const parsed = GuideImageAnalysisRequestSchema.safeParse(body);
+      if (!parsed.success) return errorResponse(422, "VALIDATION_ERROR", "魚種、工程、JPEG画像を確認してください。");
+      const guide = getReferenceGuide(parsed.data.fishId, "edible_portion");
+      const step = guide?.steps.find((candidate) => candidate.id === parsed.data.stepId);
+      if (!guide || !step) return errorResponse(422, "GUIDE_STEP_NOT_FOUND", "選択中の魚種と工程を確認してください。");
+      const base64 = parsed.data.imageData.slice(parsed.data.imageData.indexOf(",") + 1);
+      let decodedImageLength = 0;
+      try {
+        decodedImageLength = atob(base64).length;
+      } catch {
+        return errorResponse(422, "INVALID_IMAGE", "JPEG画像を送信してください。");
+      }
+      if (decodedImageLength > maxAnalysisImageBytes) return errorResponse(413, "IMAGE_TOO_LARGE", "画像サイズは2 MiB以下にしてください。");
+      const clientHash = await hashClientAddress(request.headers.get("cf-connecting-ip") ?? "local-development");
+      const limitResponse = await env.GUIDE_SESSIONS.getByName("guide-sessions").fetch(new Request("https://guide-session.internal/internal/gemini-analysis-limit", {
+        method: "POST",
+        headers: { "x-client-hash": clientHash },
+      }));
+      if (!limitResponse.ok) return errorResponse(429, "GEMINI_RATE_LIMITED", "画像確認の回数が上限に達しました。1分ほど待ってから再試行してください。");
+      try {
+        return json(await analyzeWithGemini(env, parsed.data.fishId, step.title, step.description, base64));
+      } catch (error) {
+        if (error instanceof RequestError) return errorResponse(error.status, error.code, error.message);
+        return errorResponse(502, "GEMINI_UPSTREAM_ERROR", "Gemini APIから応答を取得できませんでした。");
+      }
+    }
 
     if (pathname === "/api/guide/sessions" || sessionMatch || advanceMatch) {
       const durableRequest = new Request(new URL(pathname, "https://guide-session.internal"), request);
@@ -88,6 +126,7 @@ export default {
       const knownPath = pathname === "/api/health"
         || pathname === "/api/catalog"
         || pathname === "/api/guide"
+        || pathname === "/api/guide/analyze"
         || pathname === "/api/model/status"
         || pathname === "/api/config/orientation"
         || pathname === "/api/model/mock-observation"
@@ -98,6 +137,8 @@ export default {
 
       const allow = pathname === "/api/guide"
         ? "GET, POST"
+        : pathname === "/api/guide/analyze"
+          ? "POST"
         : pathname === "/api/guide/sessions" || advanceMatch
           ? "POST"
           : sessionMatch
@@ -134,6 +175,13 @@ export class GuideSessionStore extends DurableObject<Env> {
         updated_at INTEGER NOT NULL
       )
     `);
+    ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS guide_image_analysis_limits (
+        client_hash TEXT PRIMARY KEY,
+        request_count INTEGER NOT NULL,
+        window_started_at INTEGER NOT NULL
+      )
+    `);
     ctx.storage.sql.exec(
       "CREATE INDEX IF NOT EXISTS guide_session_creation_limits_updated_at_idx ON guide_session_creation_limits (updated_at)",
     );
@@ -145,6 +193,27 @@ export class GuideSessionStore extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     try {
       const { pathname } = new URL(request.url);
+      if (pathname === "/internal/gemini-analysis-limit" && request.method === "POST") {
+        const clientHash = request.headers.get("x-client-hash");
+        if (!clientHash || !/^[0-9a-f]{64}$/.test(clientHash)) return errorResponse(400, "BAD_REQUEST", "クライアント識別子を確認できません。");
+        const now = Date.now();
+        this.ctx.storage.sql.exec("DELETE FROM guide_image_analysis_limits WHERE window_started_at <= ?", now - analysisRateLimitWindowMs);
+        const limit = this.ctx.storage.sql.exec<{ request_count: number; window_started_at: number }>(
+          "SELECT request_count, window_started_at FROM guide_image_analysis_limits WHERE client_hash = ?",
+          clientHash,
+        ).toArray()[0];
+        if (limit && limit.request_count >= analysisRateLimitCount) return errorResponse(429, "GEMINI_RATE_LIMITED", "画像確認の回数が上限に達しました。");
+        if (limit) {
+          this.ctx.storage.sql.exec("UPDATE guide_image_analysis_limits SET request_count = request_count + 1 WHERE client_hash = ?", clientHash);
+        } else {
+          this.ctx.storage.sql.exec(
+            "INSERT INTO guide_image_analysis_limits (client_hash, request_count, window_started_at) VALUES (?, 1, ?)",
+            clientHash,
+            now,
+          );
+        }
+        return json({ allowed: true });
+      }
       const sessionMatch = pathname.match(/^\/api\/guide\/sessions\/([0-9a-f-]{36})$/i);
       const advanceMatch = pathname.match(/^\/api\/guide\/sessions\/([0-9a-f-]{36})\/advance$/i);
 
@@ -353,14 +422,14 @@ function createReferenceSession(fishId: GuideSession["fishId"], preparationId: G
   });
 }
 
-async function readRequestBody(request: Request): Promise<unknown> {
+async function readRequestBody(request: Request, maxBytes = maxBodyBytes): Promise<unknown> {
   const contentType = request.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
   if (contentType !== "application/json") {
     throw new RequestError(415, "UNSUPPORTED_MEDIA_TYPE", "Content-Typeにapplication/jsonを指定してください。");
   }
   const declaredLength = Number(request.headers.get("content-length") ?? 0);
-  if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) {
-    throw new RequestError(413, "PAYLOAD_TOO_LARGE", "リクエストのサイズが上限（16 KiB）を超えています。");
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new RequestError(413, "PAYLOAD_TOO_LARGE", `リクエストのサイズが上限（${Math.round(maxBytes / 1024)} KiB）を超えています。`);
   }
 
   const reader = request.body?.getReader();
@@ -371,9 +440,9 @@ async function readRequestBody(request: Request): Promise<unknown> {
     const { done, value } = await reader.read();
     if (done) break;
     byteLength += value.byteLength;
-    if (byteLength > maxBodyBytes) {
+    if (byteLength > maxBytes) {
       await reader.cancel();
-      throw new RequestError(413, "PAYLOAD_TOO_LARGE", "リクエストのサイズが上限（16 KiB）を超えています。");
+      throw new RequestError(413, "PAYLOAD_TOO_LARGE", `リクエストのサイズが上限（${Math.round(maxBytes / 1024)} KiB）を超えています。`);
     }
     chunks.push(value);
   }
@@ -388,6 +457,72 @@ async function readRequestBody(request: Request): Promise<unknown> {
     return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
   } catch {
     throw new RequestError(400, "INVALID_JSON", "リクエスト本文が正しいJSON形式ではありません。");
+  }
+}
+
+async function analyzeWithGemini(
+  env: Env,
+  fishId: string,
+  stepTitle: string,
+  stepDescription: string,
+  imageBase64: string,
+): Promise<GuideImageAnalysisResponse> {
+  if (!env.GEMINI_API_KEY) {
+    throw new RequestError(503, "GEMINI_NOT_CONFIGURED", "Gemini APIキーが設定されていません。apps/web/.dev.varsのGEMINI_API_KEYを確認してください。");
+  }
+  const model = env.GEMINI_MODEL?.trim() || "gemini-3.5-flash-lite";
+  let response: Response;
+  try {
+    response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [
+          { text: [
+            "あなたは魚の調理工程を補助する画像確認役です。回答は日本語で、指定されたJSON形式だけにしてください。",
+            "画像から直接見える事実だけを短く述べてください。魚種、鮮度、食用安全性、骨の完全な除去を保証してはいけません。",
+            "現在の工程が完了したか、次の工程へ進めるかを決めてはいけません。利用者の明示操作なしに工程を進めてはいけません。",
+            "不鮮明、隠れている、画角外など判断できない場合は certainty を uncertain にし、推測しないでください。",
+            `魚種ID: ${fishId}`,
+            `確認中の工程: ${stepTitle}`,
+            `表示中の参考ガイドの説明: ${stepDescription}`,
+            "visibleParts は画像内にはっきり見える head/body/tail だけを含めてください。evidence は画像上で見えることと工程説明との関係、caution は必要な場合の短い注意です。",
+          ].join("\n") },
+          { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
+        ] }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              certainty: { type: "STRING", enum: ["observed", "uncertain"] },
+              visibleParts: { type: "ARRAY", items: { type: "STRING", enum: ["head", "body", "tail"] } },
+              evidence: { type: "STRING" },
+              caution: { type: "STRING" },
+            },
+            required: ["certainty", "visibleParts", "evidence", "caution"],
+            propertyOrdering: ["certainty", "visibleParts", "evidence", "caution"],
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch {
+    throw new RequestError(504, "GEMINI_TIMEOUT", "Geminiへの接続がタイムアウトしました。少し待ってから再試行してください。");
+  }
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) throw new RequestError(502, "GEMINI_AUTH_FAILED", "Gemini APIキーを確認できませんでした。キー設定とGoogle AI Studioの利用権限を確認してください。");
+    if (response.status === 429) throw new RequestError(429, "GEMINI_RATE_LIMITED", "Gemini APIの利用上限に達しました。時間をおいて再試行してください。");
+    throw new RequestError(502, "GEMINI_UPSTREAM_ERROR", "Gemini APIから応答を取得できませんでした。モデル名とAPIの状態を確認してください。");
+  }
+  try {
+    const payload = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+    const text = payload.candidates?.[0]?.content?.parts?.find((part) => part.text)?.text;
+    if (!text) throw new Error("Empty Gemini response");
+    const result = GuideImageAnalysisResponseSchema.omit({ model: true }).parse(JSON.parse(text) as unknown);
+    return GuideImageAnalysisResponseSchema.parse({ ...result, model });
+  } catch {
+    throw new RequestError(502, "GEMINI_INVALID_RESPONSE", "Geminiの回答形式を確認できませんでした。もう一度お試しください。");
   }
 }
 
