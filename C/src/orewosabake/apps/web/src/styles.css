@@ -121,20 +121,20 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .capture-entry-button { display: flex; width: 100%; min-height: 32px; flex: 0 0 auto; align-items: center; justify-content: center; margin-top: 5px; padding: 0; border: 0; color: var(--muted); background: transparent; font-size: 10px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 .capture-entry-button:disabled { cursor: not-allowed; opacity: .55; }
 
-.guide-screen { display: flex; min-height: 100vh; min-height: 100dvh; align-items: center; justify-content: center; background: var(--deep); }
+.guide-screen { display: flex; min-height: 100vh; min-height: 100dvh; align-items: center; justify-content: center; background: var(--paper); }
 .orientation-screen { display: none; }
-.landscape-screen { display: flex; width: min(100%, 844px); height: min(100vh, 390px); height: min(100dvh, 390px); min-height: 0; flex-direction: column; overflow: hidden; background: var(--deep); }
-.guide-header { display: flex; height: 48px; min-height: 48px; flex: 0 0 48px; align-items: center; gap: 12px; padding: 0 18px; color: var(--on-dark); }
+.landscape-screen { display: flex; width: min(100%, 844px); height: min(100vh, 390px); height: min(100dvh, 390px); min-height: 0; flex-direction: column; overflow: hidden; background: var(--paper); }
+.guide-header { display: flex; height: 48px; min-height: 48px; flex: 0 0 48px; align-items: center; gap: 12px; padding: 0 18px; color: var(--ink); }
 .back-link { display: grid; width: 27px; height: 27px; flex: 0 0 27px; place-items: center; border: 1px solid rgba(255, 250, 242, .26); border-radius: 50%; color: var(--on-dark); background: rgba(255, 255, 255, .08); font-size: 17px; cursor: pointer; }
-.guide-header .back-link { display: inline-flex; width: auto; min-height: 30px; flex: 0 0 auto; align-items: center; gap: 6px; padding: 0 10px; border-radius: 999px; font-size: 10px; font-weight: 600; white-space: nowrap; }
+.guide-header .back-link { display: inline-flex; width: auto; min-height: 30px; flex: 0 0 auto; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--deep); background: var(--card); font-size: 10px; font-weight: 600; white-space: nowrap; }
 .guide-header .back-link > span:first-child { font-size: 17px; line-height: 1; }
 .guide-brand { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .guide-brand strong { color: var(--deep); font-size: 14px; font-weight: 800; letter-spacing: .04em; }
 .guide-brand span { color: var(--muted); font-size: 10px; }
 .guide-header .guide-brand { flex: 1; }
-.guide-header .guide-brand strong { overflow: hidden; color: var(--on-dark); font-size: 16px; font-weight: 700; letter-spacing: 0; text-overflow: ellipsis; white-space: nowrap; }
+.guide-header .guide-brand strong { overflow: hidden; color: var(--deep); font-size: 16px; font-weight: 700; letter-spacing: 0; text-overflow: ellipsis; white-space: nowrap; }
 .guide-header-progress { display: flex; min-width: 122px; flex-direction: column; align-items: flex-end; gap: 4px; }
-.guide-header-progress > strong { color: rgba(255, 250, 242, .9); font: 9px "DM Mono", monospace; letter-spacing: .04em; white-space: nowrap; }
+.guide-header-progress > strong { color: var(--muted); font: 9px "DM Mono", monospace; letter-spacing: .04em; white-space: nowrap; }
 .guide-header-progress .guide-progress { display: flex; width: 112px; gap: 4px; margin: 0; }
 .guide-header .help-trigger { margin-left: 0; }
 .camera-stop-icon { display: block; width: 14px; height: 14px; }
