@@ -379,7 +379,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
           </li>
         </ol>
 
-        <p className="help-privacy-note">カメラ映像は端末内で表示します。「この画像をGeminiで確認」を押した場合だけ、静止画をAPI経由でGoogle Geminiへ送信します。手順は公開資料を参考にした未確認の案内です。安全を優先してください。</p>
+        <p className="help-privacy-note">通常のカメラ映像は端末内で処理します。「Gemini自動確認」に同意して有効にすると、圧縮した静止画1枚を最初にすぐ、その後は約1分ごとにGoogleへ送信します。連続動画やアプリへの画像保存はありません。チェックを外すと停止します。手順とAIの結果は参考情報で、工程は自動で進みません。</p>
         <footer className="help-dialog-footer">
           <button type="button" onClick={() => dialogRef.current?.close()}>OK</button>
         </footer>
@@ -399,6 +399,8 @@ function App() {
   const [guideSessionLoading, setGuideSessionLoading] = useState(false);
   const [guideMessage, setGuideMessage] = useState("");
   const [geminiAnalysis, setGeminiAnalysis] = useState<{ loading: boolean; result?: GuideImageAnalysisResponse; error?: string }>({ loading: false });
+  const [geminiAutoEnabled, setGeminiAutoEnabled] = useState(false);
+  const [pageVisible, setPageVisible] = useState(true);
   const [guideAdvancing, setGuideAdvancing] = useState(false);
   const [activeStep, setActiveStepState] = useState(0);
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("idle");
@@ -430,6 +432,7 @@ function App() {
   const guideRequestController = useRef<AbortController | null>(null);
   const guideAdvanceInFlight = useRef(false);
   const geminiAnalysisRequestId = useRef(0);
+  const geminiAutoAnalyzerRef = useRef<(() => Promise<void>) | null>(null);
   const detectionFishName = selectedFish === "その他" ? search.trim() || "ほかの魚" : selectedFish;
   const detectionFishId = screen === "guide" ? resolveGuideFishId(detectionFishName) ?? null : null;
   const headTailDetection = useHeadTailDetection(
@@ -468,6 +471,13 @@ function App() {
   ]);
 
   useEffect(() => () => guideRequestController.current?.abort(), []);
+
+  useEffect(() => {
+    const updateVisibility = () => setPageVisible(document.visibilityState === "visible");
+    updateVisibility();
+    document.addEventListener("visibilitychange", updateVisibility);
+    return () => document.removeEventListener("visibilitychange", updateVisibility);
+  }, []);
 
   useEffect(() => {
     if (screen !== "capture" || (!pendingCapture && (captureRows.length === 0 || captureManifestExported))) return;
@@ -558,6 +568,7 @@ function App() {
     setGuideSessionLoading(false);
     setGuideMessage("");
     setGeminiAnalysis({ loading: false });
+    setGeminiAutoEnabled(false);
     setCameraMessage("");
 
     guideRequestController.current?.abort();
@@ -1039,6 +1050,7 @@ function App() {
   }
 
   async function analyzeCurrentCameraImage() {
+    if (geminiAnalysis.loading || guideAdvancing || guideSessionLoading) return;
     if (!guideSession || !currentStep || !selectedGuideFishId || !videoRef.current || cameraStatus !== "active") {
       setGeminiAnalysis({ loading: false, error: "カメラ映像と現在の工程を確認してください。" });
       return;
@@ -1061,6 +1073,32 @@ function App() {
       if (!signal.aborted && requestId === geminiAnalysisRequestId.current) setGeminiAnalysis({ loading: false, error: error instanceof Error ? error.message : "画像をAIで確認できませんでした。" });
     }
   }
+
+  useEffect(() => {
+    geminiAutoAnalyzerRef.current = analyzeCurrentCameraImage;
+  });
+
+  useEffect(() => {
+    if (!geminiAutoEnabled || !pageVisible) return;
+    if (screen !== "guide" || cameraStatus !== "active" || !cameraStream || !guideSession
+      || guideSessionMode !== "worker" || guideSession.status === "completed" || guideIsComplete) {
+      setGeminiAutoEnabled(false);
+      return;
+    }
+
+    let stopped = false;
+    let timerId: number | undefined;
+    const checkAndScheduleNext = async () => {
+      if (stopped) return;
+      await geminiAutoAnalyzerRef.current?.();
+      if (!stopped) timerId = window.setTimeout(() => void checkAndScheduleNext(), 60_000);
+    };
+    void checkAndScheduleNext();
+    return () => {
+      stopped = true;
+      if (timerId !== undefined) window.clearTimeout(timerId);
+    };
+  }, [geminiAutoEnabled, pageVisible, screen, cameraStatus, cameraStream, guideSession?.sessionId, guideSession?.status, guideSessionMode, guideIsComplete]);
 
   const detectionTitle = headTailDetection.status === "active"
     ? "MediaPipe試験モデルで頭・尾を確認中"
@@ -1402,10 +1440,20 @@ function App() {
                     <p>{currentStep.description}</p>
                     {guideMessage ? <p className="guide-message" role="status">{guideMessage}</p> : null}
                     <div className="gemini-guide-check">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={geminiAutoEnabled}
+                          onChange={(event) => setGeminiAutoEnabled(event.currentTarget.checked)}
+                          disabled={(!geminiAutoEnabled && cameraStatus !== "active") || guideSessionMode !== "worker" || guideSessionLoading || guideAdvancing || guideIsComplete}
+                        />
+                        <span>同意してGemini自動確認（約1分ごと）</span>
+                      </label>
                       <button type="button" onClick={() => void analyzeCurrentCameraImage()} disabled={cameraStatus !== "active" || geminiAnalysis.loading || guideSessionLoading || guideAdvancing}>
                         {geminiAnalysis.loading ? "Geminiが画像を確認中…" : "この画像をGeminiで確認"}
                       </button>
-                      <small>押した時点の静止画だけを送ります。AIは工程を進めません。</small>
+                      <small>ONにすると静止画を1枚ずつ送信し、確認後に約1分おきに更新します。OFFなら「この画像をGeminiで確認」を押した時だけ送信します。連続動画は送らず、工程も自動で進みません。</small>
+                      {geminiAutoEnabled ? <small className="gemini-auto-status" role="status">{!pageVisible ? "画面を表示すると自動確認を再開します" : geminiAnalysis.loading ? "自動確認中：画像を解析しています…" : "自動確認中：約1分ごとに確認します"}</small> : null}
                       {geminiAnalysis.result ? (
                         <div className="gemini-guide-result" data-certainty={geminiAnalysis.result.certainty} role="status">
                           <strong>{geminiAnalysis.result.certainty === "observed" ? "画像で見えたこと" : "画像だけでは判断できません"}</strong>
