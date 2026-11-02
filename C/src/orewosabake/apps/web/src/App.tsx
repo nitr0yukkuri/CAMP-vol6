@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { AdvanceGuideStepRequestSchema, CATALOG, getPreparationIdForFish, getReferenceGuide, GuideRequestSchema, GuideSessionSchema, resolveGuideFishId, type GuideRequest, type GuideSession, type Observation } from "@orewosabake/contracts";
+import { AdvanceGuideStepRequestSchema, getPreparationIdForFish, getReferenceGuide, GuideRequestSchema, GuideSessionSchema, resolveGuideFishId, type GuideRequest, type GuideSession, type Observation } from "@orewosabake/contracts";
 import { useHeadTailDetection, type HeadTailDetectionStatus } from "./hooks/useHeadTailDetection";
 import { fishStageLabel, stageToExpectedFishState } from "./model/fishStage";
 
@@ -160,8 +160,11 @@ async function createGuideSession(requestBody: GuideRequest, signal: AbortSignal
   const contentType = response.headers.get("content-type") ?? "";
   if (!response.ok) {
     const payload = contentType.includes("application/json")
-      ? await response.clone().json().catch(() => null) as { error?: { code?: string } } | null
+      ? await response.clone().json().catch(() => null) as { error?: { code?: string; message?: string } } | null
       : null;
+    if (payload?.error?.code === "GUIDE_NOT_AVAILABLE") {
+      throw new GuideNotAvailableError(payload.error.message ?? "この魚の参考手順はまだ登録されていません。");
+    }
     const apiRouteMissing = response.status === 404 || response.status === 405;
     if (apiRouteMissing && (!payload?.error?.code || ["NOT_FOUND", "METHOD_NOT_ALLOWED"].includes(payload.error.code))) {
       throw new GuideApiUnavailableError();
@@ -173,6 +176,7 @@ async function createGuideSession(requestBody: GuideRequest, signal: AbortSignal
 }
 
 class GuideApiUnavailableError extends Error {}
+class GuideNotAvailableError extends Error {}
 
 function createLocalGuideSession(requestBody: GuideRequest): GuideSession {
   const guide = getReferenceGuide(requestBody.fishId, requestBody.preparationId);
@@ -484,9 +488,6 @@ function App() {
   const selectedFishVisualData = selectedFishData ?? (selectedFish === "その他" ? genericFishVisualData : undefined);
   const knownGuideFishId = resolveGuideFishId(chosenFish);
   const selectedGuideFishId = knownGuideFishId ?? (selectedFish === "その他" ? "other_finfish" : undefined);
-  const selectedGuideFishAvailable = selectedGuideFishId
-    ? CATALOG.fish.find((fish) => fish.id === selectedGuideFishId)?.guideAvailable === true
-    : false;
   const stageCaptureSupported = knownGuideFishId !== undefined
     && ["aji", "saba", "tai", "hamachi"].includes(knownGuideFishId);
   const guide = guideSession?.guide;
@@ -508,7 +509,6 @@ function App() {
   }
 
   function startGuide() {
-    if (!selectedGuideFishId || !selectedGuideFishAvailable) return;
     setScreen("guide");
     setActiveStep(0);
     setGuideSession(null);
@@ -542,6 +542,8 @@ function App() {
           } catch {
             setGuideMessage("魚種別の参考手順を準備できませんでした。魚を選び直してください。");
           }
+        } else if (!guideController.signal.aborted && error instanceof GuideNotAvailableError) {
+          setGuideMessage(error.message);
         } else if (!guideController.signal.aborted) {
           setGuideMessage("参考手順を読み込めませんでした。通信状態を確認して、魚を選び直してください。");
         }
@@ -1093,9 +1095,9 @@ function App() {
               {matchingFish.length === 0 && !search ? <p className="empty-fish">このカテゴリの魚は準備中です。</p> : null}
             </div>
 
-            <button className="start-button" type="button" disabled={!selectedGuideFishId || !selectedGuideFishAvailable} onClick={() => void startGuide()}>
+            <button className="start-button" type="button" onClick={() => void startGuide()}>
               <strong>俺を捌け！</strong>
-              <span>{selectedGuideFishId === "other_finfish" ? "基本の三枚おろしで進む" : selectedGuideFishId && !selectedGuideFishAvailable ? "この魚のガイドは未対応" : selectedGuideFishId ? "この魚を捌く" : "この魚の手順は準備中"}</span>
+              <span>{selectedGuideFishId === "other_finfish" ? "基本の三枚おろしで進む" : selectedGuideFishId ? "この魚を捌く" : "この魚の手順は準備中"}</span>
             </button>
             <button className="capture-entry-button" type="button" disabled={!fishCanContinue} onClick={startCapture}>
               研究用データを撮る
