@@ -1660,7 +1660,6 @@ function App() {
                       <button type="button" onClick={() => void analyzeCurrentCameraImage()} disabled={cameraStatus !== "active" || geminiAnalysis.loading || guideSessionLoading || guideAdvancing}>
                         {geminiAnalysis.loading ? "Geminiが画像を確認中…" : "この画像をGeminiで確認"}
                       </button>
-                      <small>MediaPipeが頭または尾の検知を約1秒ごとに確認し、初回検知または新しい検知状態が3回連続で確認された時に、圧縮静止画を1枚だけGeminiへ送信します。短時間に続く変化は10秒間隔にまとめます。頭・尾が見えないだけでは切除済みと判断せず、工程も自動で進みません。OFFなら手動ボタンを押した時だけ送ります。</small>
                       {geminiAutoEnabled ? (
                         <small className="gemini-auto-status" role="status">
                           {!pageVisible
