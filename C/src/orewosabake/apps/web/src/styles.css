@@ -148,7 +148,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .guide-fish-bubble::after { position: absolute; bottom: -5px; left: 50%; width: 10px; height: 10px; background: #fff; content: ""; transform: translateX(-50%) rotate(45deg); }
 .guide-fish-bubble-copy { display: block; font-size: 10px; font-weight: 700; line-height: 1.35; }
 .guide-fish-bubble-feedback { display: grid; justify-items: center; gap: 5px; }
-.guide-fish-bubble-status { display: block; max-height: min(18vh, 100px); overflow-y: auto; margin-top: 4px; color: var(--muted); font-size: 9px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; scrollbar-width: thin; }
+.guide-fish-bubble-status { display: block; max-height: min(18vh, 100px); overflow-y: auto; margin-top: 4px; color: var(--muted); font-size: 9px; font-weight: 600; line-height: 1.4; white-space: pre-line; overflow-wrap: anywhere; scrollbar-width: thin; }
 .guide-fish-bubble-status[data-state="error"], .guide-fish-bubble-status[data-state="unavailable"] { color: var(--action); }
 .guide-fish-bubble-status[data-state="loading"], .guide-fish-bubble-status[data-state="paused"] { color: var(--notice); }
 .guide-fish-bubble-status[data-state="observed"], .guide-fish-bubble-status[data-state="likely_complete"] { color: var(--success); }

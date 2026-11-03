@@ -7,8 +7,9 @@ const profile = __ENV.K6_PROFILE ?? "smoke";
 const loadRate = Number(__ENV.K6_RATE ?? 5);
 const loadVUs = Number(__ENV.K6_MAX_VUS ?? Math.max(1, Math.ceil(loadRate)));
 const requestBody = {
-  fishId: "saba",
-  stepId: "saba_prepare",
+  fishId: "salmon",
+  stepId: "salmon_scale",
+  baselineImageData: "data:image/jpeg;base64,a2Y2LXN0YXJ0LWZpc2g=",
   imageData: "data:image/jpeg;base64,a2Y2LXRlc3QtZmlzaA==",
 };
 
@@ -24,6 +25,7 @@ const smokeCases = [
   { scenario: "invalid_output", expectedStatus: 502, expectedCode: "GEMINI_INVALID_RESPONSE" },
   { scenario: "auth_401", expectedStatus: 502, expectedCode: "GEMINI_AUTH_FAILED" },
   { scenario: "network_retry", expectedStatus: 200 },
+  { scenario: "non_salmon_success", expectedStatus: 200 },
   { scenario: "success", expectedStatus: 422, expectedCode: "VALIDATION_ERROR", invalidPayload: true },
 ];
 
@@ -62,7 +64,11 @@ export const options = profile === "load"
     };
 
 function postScenario(scenario, expectedStatus, expectedCode, invalidPayload = false) {
-  const payload = invalidPayload ? { ...requestBody, imageData: "not-base64" } : requestBody;
+  const nonSalmon = scenario === "non_salmon_success";
+  const basePayload = nonSalmon
+    ? { fishId: "saba", stepId: "saba_prepare", imageData: requestBody.imageData }
+    : requestBody;
+  const payload = invalidPayload ? { ...basePayload, imageData: "not-base64" } : basePayload;
   const response = http.post(`${baseUrl}/api/guide/analyze`, JSON.stringify(payload), {
     headers: {
       "Content-Type": "application/json",
@@ -82,6 +88,9 @@ function postScenario(scenario, expectedStatus, expectedCode, invalidPayload = f
       ? body?.error?.code === expectedCode
       : body?.model === "gemini-3.5-flash-lite"
         && body?.certainty === "uncertain"
+        && (nonSalmon
+          ? body?.fishStateAssessment === undefined
+          : body?.fishStateAssessment?.state === "unknown")
         && body?.stepAssessment?.status === "uncertain",
   });
 }
@@ -117,6 +126,7 @@ export function teardown() {
     invalid_output: 1,
     auth_401: 1,
     network_retry: 2,
+    non_salmon_success: 1,
   };
   check(response, {
     "fake Gemini received the expected retries and rejected cases": (res) => res.status === 200

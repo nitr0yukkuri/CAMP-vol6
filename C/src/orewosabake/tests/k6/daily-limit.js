@@ -4,8 +4,9 @@ import { check } from "k6";
 const baseUrl = __ENV.BASE_URL ?? "http://127.0.0.1:8787";
 const mockUrl = __ENV.MOCK_URL ?? "http://127.0.0.1:8789";
 const requestBody = {
-  fishId: "saba",
-  stepId: "saba_prepare",
+  fishId: "salmon",
+  stepId: "salmon_scale",
+  baselineImageData: "data:image/jpeg;base64,a2Y2LXN0YXJ0LWZpc2g=",
   imageData: "data:image/jpeg;base64,a2Y2LXRlc3QtZmlzaA==",
 };
 
@@ -42,6 +43,7 @@ export default function () {
     check(response, {
       "daily limit allows the first request": (res) => res.status === 200,
       "first request returns a valid Gemini response": () => body?.certainty === "uncertain"
+        && body?.fishStateAssessment?.state === "unknown"
         && body?.stepAssessment?.status === "uncertain",
     });
     return;
