@@ -760,7 +760,7 @@ function App() {
   }
 
   async function saveCaptureFrame() {
-    if (pendingCapture) return;
+    if (pendingCapture || captureBusy) return;
     const video = videoRef.current;
     if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.videoWidth < 1 || video.videoHeight < 1) {
       setCaptureMessage("カメラ映像の準備ができるまで待ってください。");
@@ -808,6 +808,7 @@ function App() {
   }
 
   async function saveStageCaptureFrame() {
+    if (pendingCapture || captureBusy) return;
     const video = videoRef.current;
     if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.videoWidth < 1 || video.videoHeight < 1) {
       setCaptureMessage("カメラ映像の準備ができるまで待ってください。");
@@ -1571,7 +1572,7 @@ function App() {
                 <label className="capture-field"><span>端末機種（任意）</span><input value={captureDeviceModel} onChange={(event) => { setCaptureDeviceModel(event.currentTarget.value);  }} maxLength={120} placeholder="不明（任意）" /></label>
               </div>
 
-              <button className="capture-export-button" type="button" onClick={() => void saveStageCaptureFrame()} disabled={!stageCaptureSupported || cameraStatus !== "active" || captureBusy || captureRows.length >= MAX_CAPTURE_FRAMES || captureStage === "unknown"}>
+              <button className="capture-export-button" type="button" onClick={() => void saveStageCaptureFrame()} disabled={!stageCaptureSupported || cameraStatus !== "active" || captureBusy || pendingCapture !== null || captureRows.length >= MAX_CAPTURE_FRAMES || captureStage === "unknown"}>
                 {captureBusy ? "保存中…" : "工程画像を保存（頭・尾の枠なし）"}
               </button>
               <p className="capture-label-hint">{stageCaptureSupported ? "工程分類のデータを集める場合はこちら。画像と工程ラベルが一致するか保存前に確認します。「その他」は5つの対象工程に当てはまらない魚の画像として記録します。" : "工程分類用の撮影はハマチ・アジ・サバ・タイが対象です。魚種別ガイドは利用できます。"}</p>
