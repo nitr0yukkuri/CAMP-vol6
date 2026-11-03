@@ -1208,6 +1208,7 @@ function App() {
     guideSession?.status,
     guideSessionMode,
     guideIsComplete,
+    currentStep?.id,
     headTailDetection.status,
     headTailDetection.observation,
   ]);
