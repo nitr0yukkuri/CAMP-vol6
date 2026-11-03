@@ -62,6 +62,10 @@ export const GuideImageAnalysisResponseSchema = z.object({
   model: z.string().min(1),
   certainty: z.enum(["observed", "uncertain"]),
   visibleParts: z.array(z.enum(["head", "body", "tail"])).max(3),
+  stepAssessment: z.object({
+    status: z.enum(["likely_complete", "in_progress", "uncertain"]),
+    evidence: z.string().max(180),
+  }).strict(),
   evidence: z.string().max(240),
   caution: z.string().max(180),
 }).strict();
