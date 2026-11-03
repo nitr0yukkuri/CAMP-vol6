@@ -608,7 +608,7 @@ async function analyzeWithGemini(
       if (response.status === 401 || response.status === 403) {
         throw new RequestError(502, "GEMINI_AUTH_FAILED", "Gemini APIキーを確認できませんでした。キー設定とGoogle AI Studioの利用権限を確認してください。");
       }
-      if (response.status === 429 && isGeminiQuotaError(payload)) {
+      if (response.status === 429 && isGeminiDailyQuotaError(payload)) {
         throw new RequestError(429, "GEMINI_QUOTA_EXCEEDED", "Gemini APIの利用枠を超えました。利用枠と請求設定を確認してください。");
       }
       if (response.status === 429) {
