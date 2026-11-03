@@ -5,6 +5,9 @@
   "compatibility_date": "2026-10-30",
   "upload_source_maps": true,
   "workers_dev": true,
+  "vars": {
+    "GEMINI_DAILY_ANALYSIS_LIMIT": "500"
+  },
   "durable_objects": {
     "bindings": [
       { "name": "GUIDE_SESSIONS", "class_name": "GuideSessionStore" }

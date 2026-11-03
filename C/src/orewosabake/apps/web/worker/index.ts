@@ -32,6 +32,7 @@ interface Env {
   GUIDE_SESSIONS: DurableObjectNamespace<GuideSessionStore>;
   GEMINI_API_KEY?: string;
   GEMINI_MODEL?: string;
+  GEMINI_DAILY_ANALYSIS_LIMIT?: string;
   GEMINI_TEST_MODE?: string;
   GEMINI_TEST_API_URL?: string;
   GEMINI_TEST_TIMEOUT_MS?: string;
@@ -39,6 +40,7 @@ interface Env {
   GEMINI_TEST_MAX_ATTEMPTS?: string;
   GEMINI_TEST_RETRY_BASE_DELAY_MS?: string;
   GEMINI_TEST_ANALYSIS_LIMIT?: string;
+  GEMINI_TEST_DAILY_ANALYSIS_LIMIT?: string;
 }
 
 class RequestError extends Error {
@@ -76,7 +78,7 @@ export default {
         method: "POST",
         headers: { "x-client-hash": clientHash },
       }));
-      if (!limitResponse.ok) return errorResponse(429, "GEMINI_RATE_LIMITED", "画像確認の回数が上限に達しました。1分ほど待ってから再試行してください。");
+      if (!limitResponse.ok) return limitResponse;
       try {
         const testScenario = env.GEMINI_TEST_MODE === "true" ? request.headers.get("x-k6-scenario") : null;
         return json(await analyzeWithGemini(env, parsed.data.fishId, step.title, step.description, step.expectedState, base64, testScenario));
@@ -190,6 +192,13 @@ export class GuideSessionStore extends DurableObject<Env> {
         window_started_at INTEGER NOT NULL
       )
     `);
+    ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS guide_image_analysis_daily_limits (
+        singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+        utc_day TEXT NOT NULL,
+        request_count INTEGER NOT NULL
+      )
+    `);
     ctx.storage.sql.exec(
       "CREATE INDEX IF NOT EXISTS guide_session_creation_limits_updated_at_idx ON guide_session_creation_limits (updated_at)",
     );
@@ -213,7 +222,17 @@ export class GuideSessionStore extends DurableObject<Env> {
         const requestLimit = this.env.GEMINI_TEST_MODE === "true"
           ? readTestInteger(this.env.GEMINI_TEST_ANALYSIS_LIMIT, 1_000, 1, 10_000)
           : analysisRateLimitCount;
+        const dailyRequestLimit = this.env.GEMINI_TEST_MODE === "true"
+          ? readTestInteger(this.env.GEMINI_TEST_DAILY_ANALYSIS_LIMIT, 10_000, 1, 100_000)
+          : readConfiguredDailyAnalysisLimit(this.env.GEMINI_DAILY_ANALYSIS_LIMIT);
         if (limit && limit.request_count >= requestLimit) return errorResponse(429, "GEMINI_RATE_LIMITED", "画像確認の回数が上限に達しました。");
+        const utcDay = new Date(now).toISOString().slice(0, 10);
+        const dailyLimit = this.ctx.storage.sql.exec<{ utc_day: string; request_count: number }>(
+          "SELECT utc_day, request_count FROM guide_image_analysis_daily_limits WHERE singleton_id = 1",
+        ).toArray()[0];
+        if (dailyLimit?.utc_day === utcDay && dailyLimit.request_count >= dailyRequestLimit) {
+          return errorResponse(429, "GEMINI_DAILY_LIMIT_REACHED", "本日の画像確認回数の上限に達しました。明日以降に再度お試しください。");
+        }
         if (limit) {
           this.ctx.storage.sql.exec("UPDATE guide_image_analysis_limits SET request_count = request_count + 1 WHERE client_hash = ?", clientHash);
         } else {
@@ -223,6 +242,18 @@ export class GuideSessionStore extends DurableObject<Env> {
             now,
           );
         }
+        this.ctx.storage.sql.exec(
+          `INSERT INTO guide_image_analysis_daily_limits (singleton_id, utc_day, request_count)
+           VALUES (1, ?, 1)
+           ON CONFLICT(singleton_id) DO UPDATE SET
+             utc_day = excluded.utc_day,
+             request_count = CASE
+               WHEN guide_image_analysis_daily_limits.utc_day = excluded.utc_day
+               THEN guide_image_analysis_daily_limits.request_count + 1
+               ELSE 1
+             END`,
+          utcDay,
+        );
         return json({ allowed: true });
       }
       const sessionMatch = pathname.match(/^\/api\/guide\/sessions\/([0-9a-f-]{36})$/i);
@@ -623,6 +654,15 @@ function readTestInteger(value: string | undefined, fallback: number, minimum: n
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
     throw new RequestError(503, "GEMINI_TEST_CONFIG_INVALID", "ローカルGeminiテスト設定の数値範囲を確認してください。");
+  }
+  return parsed;
+}
+
+function readConfiguredDailyAnalysisLimit(value: string | undefined): number {
+  if (value === undefined) return 500;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 100_000) {
+    throw new RequestError(503, "GEMINI_LIMIT_CONFIG_INVALID", "Gemini画像確認の日次上限は1〜100000の整数にしてください。");
   }
   return parsed;
 }
