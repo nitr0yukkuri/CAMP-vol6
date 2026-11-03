@@ -124,7 +124,7 @@ ZIPが破損している、ルート直下に `head-tail.tflite` 以外のファ
 
 ChatGPT Sitesなど静的ホストではWorker APIを同梱していないため、画面は同じ魚別参考手順を使う端末内セッションに切り替えます。この場合の進行状態は画面を閉じると消えます。Cloudflare WorkerではDurable Objectのセッションを使い、Node版APIではメモリ内セッションを使います。
 
-Gemini画像確認の指示と制約は [apps/api/prompts/fish-guide.md](apps/api/prompts/fish-guide.md) にあります。表示中の参考ガイドだけを根拠にし、画像だけで工程完了や安全性を断定しません。Workerの画像確認はIPごとに1分10回までです。自動確認には同一タブ内の10秒クールダウンもあります。
+Gemini画像確認の指示と制約は [apps/api/prompts/fish-guide.md](apps/api/prompts/fish-guide.md) にあります。表示中の参考ガイドだけを根拠にし、画像だけで工程完了や安全性を断定しません。Workerの画像確認はIPごとに1分10回、アプリ全体でUTC日付あたり500回までです。全体上限は `apps/web/wrangler.jsonc` の `GEMINI_DAILY_ANALYSIS_LIMIT` で調整できます。自動確認には同一タブ内の10秒クールダウンもあります。頭・尾の検出がない映像はGeminiへ送信しません。
 
 工程進行APIは魚種ごとの参考手順をセッションに保存します。セッション開始には `POST /api/guide/sessions` へ魚種・目的を送り、次へ進むときは現在の `stepId` と `source`（`button` または `voice`）を送ります。音声の場合はブラウザ側で音声認識した `transcript: "次へ"` が必要です。現在の工程IDと一致しない操作、認識された言葉が「次へ」でない操作では進みません。Cloudflare環境ではセッションと進捗をDurable ObjectのSQLiteストレージに保存するため、Workerの再起動後も利用できます。ローカルNode APIではメモリ内だけに保持され、API再起動で消えます。保持セッションは最大500件で、`updatedAt`から30分経過したものは次のAPIリクエストまたはDurable Objectの期限アラームで削除されます。上限到達時は `503 SESSION_CAPACITY_REACHED` を返します。公開Workerではクライアントごとに開始枠10件を持つトークンバケットで制限し、10秒ごとに1件分を補充します。上限時は `429 SESSION_RATE_LIMITED` と `Retry-After` を返します。Cloudflareが付与する `CF-Connecting-IP` をSHA-256でハッシュした値を制限キーにします。生IPはDBに保存しませんが、ハッシュも匿名化ではないため、トークン枠が補充される期限（最大100秒）に合わせてDurable Objectの期限アラームで削除します。これは単一IPからの連続作成を抑える対策で、複数IPを使う分散リクエストすべてを防ぐものではありません。AIの画像確認は静止画上の参考情報です。工程進行は利用者が自分で確認して操作します。
 
