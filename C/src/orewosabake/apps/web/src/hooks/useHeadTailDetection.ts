@@ -77,10 +77,6 @@ function errorMessage(error: unknown): string {
   return message.replace(/\s+/g, " ").slice(0, 240) || "原因を特定できませんでした。";
 }
 
-function isDocumentUnavailableInWorker(error: unknown): boolean {
-  return /(?:can't find variable:\s*document|document is not defined|referenceerror:\s*document)/i.test(errorMessage(error));
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -574,17 +570,22 @@ export function useHeadTailDetection(
             ...(fishStageModelPath ? { fishStageModelPath } : {}),
           });
         } catch (workerError) {
-          if (!isDocumentUnavailableInWorker(workerError)) throw workerError;
+          if (initializationController.signal.aborted || (workerError instanceof Error && workerError.name === "AbortError")) {
+            throw workerError;
+          }
 
           inferenceWorker?.terminate();
           if (worker === inferenceWorker) worker = null;
           if (workerRef.current === inferenceWorker) workerRef.current = null;
 
-          // Some mobile browsers do not expose DOM APIs to module Workers. MediaPipe's
-          // WASM loader then tries to access `document`; initialize that same detector
-          // on the page thread so recognition can continue without restarting the camera.
-          const { MediaPipeFishInference: createInference } = await import("../model/mediapipeHeadTailDetector");
-          mainThreadInference = await createInference.create(MODEL_PATH, WASM_PATH, fishStageModelPath, FACE_MODEL_PATH);
+          // Retry non-cancelled Worker initialization failures on the page thread with
+          // classic WASM glue, which avoids module-Worker loader behavior.
+          try {
+            const { MediaPipeFishInference: createInference } = await import("../model/mediapipeHeadTailDetector");
+            mainThreadInference = await createInference.create(MODEL_PATH, WASM_PATH, fishStageModelPath, FACE_MODEL_PATH, false);
+          } catch (fallbackError) {
+            throw new Error(`Worker: ${errorMessage(workerError)} / 画面側: ${errorMessage(fallbackError)}`);
+          }
           if (disposed) {
             mainThreadInference.close();
             mainThreadInference = null;
