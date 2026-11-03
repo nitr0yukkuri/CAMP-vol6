@@ -2,7 +2,7 @@
 
 この手順は Cloudflare Worker をローカルで起動し、`/api/guide/analyze` からループバック上の偽Gemini APIを呼び出します。Google APIへ通信せず、実際のGemini APIキーも使いません。偽APIは画像本文を保存・ログ出力しません。
 
-Worker側の再試行は、ネットワーク失敗・一時的な `429`・`5xx` に対して最大2回です。日次クォータ超過、認証失敗、不正な成功レスポンスは再試行しません。`Retry-After` が2秒を超える場合もその待ち時間を尊重して即時に再送することはせず、エラーを返します。全体の処理時間にも上限があります。
+Worker側は、ネットワーク失敗・一時的な `429`・`5xx` を最大1回再試行します。日次クォータ（`QUOTA_EXCEEDED` や `PerDay` / `RPD` の詳細で識別）・認証失敗・不正な成功レスポンスは再試行しません。待ち時間は `Retry-After` ヘッダーと `google.rpc.RetryInfo.retryDelay` を確認し、2秒を超える場合は再送しません。全体の処理時間にも上限があります。
 
 `GEMINI_TEST_MODE=true` の時だけテスト用URLを受け付けます。URLは設定モデルのGenerateContentパスを持つ `localhost` / `127.0.0.1` / `[::1]` のHTTPに限定し、テストシナリオヘッダーを偽APIへ渡します。Cloudflareの通常設定ではテストモードを有効にしないでください。
 
