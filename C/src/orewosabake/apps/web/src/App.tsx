@@ -298,14 +298,6 @@ function FishMark() {
   );
 }
 
-function fishTeacherDialogue(step?: { id: string; title: string }) {
-  if (!step) return "いっしょに確認しよう！";
-  if (step.id === "hamachi_scales") return "よーし！うろこ取りだよ！体をぬらして、ヒレの近くもチェック！";
-  if (step.id === "tai_scales") return "よーし！うろこ取りだよ！尾側から取って、ヒレの近くも見てね！";
-  if (step.id === "other_finfish_identify") return "まず魚の種類を確認しよう！迷ったらお店に聞いてね！";
-  return `いい調子！「${step.title}」に挑戦だよ！`;
-}
-
 function SearchIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1597,16 +1589,6 @@ function App() {
                   ) : null}
                 </section>
 
-                <aside className="guide-fish-stage" aria-label={`${chosenFish}先生`}>
-                  <div className="guide-fish-bubble" aria-live="polite">{fishTeacherDialogue(currentStep)}</div>
-                  {selectedFishVisualData ? (
-                    <img
-                      className={fishImageClass("guide-fish-image")}
-                      src={fishImage(selectedFishVisualData)}
-                      alt={`${selectedFishVisualData.name}先生`}
-                    />
-                  ) : null}
-                </aside>
               </div>
 
               <aside className="guide-panel">
