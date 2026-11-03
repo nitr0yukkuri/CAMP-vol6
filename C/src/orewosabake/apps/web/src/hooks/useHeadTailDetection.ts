@@ -245,7 +245,7 @@ export function useHeadTailDetection(
       fishStage: { ...STAGE_IDLE, status: "loading", message: fishStageMessage },
     });
 
-    const stopInference = () => {
+    const stopInference = (faceCheckError = new Error("カメラ認識が停止したため、画像は送信しませんでした。")) => {
       if (intervalId !== undefined) window.clearInterval(intervalId);
       if (inferenceTimeoutId !== undefined) window.clearTimeout(inferenceTimeoutId);
       intervalId = undefined;
@@ -253,7 +253,7 @@ export function useHeadTailDetection(
       inferenceInFlight = false;
       workerReadyRef.current = false;
       if (workerRef.current === worker) workerRef.current = null;
-      rejectPendingFaceChecks(pendingFaceChecksRef.current, new Error("カメラ認識が停止したため、画像は送信しませんでした。"));
+      rejectPendingFaceChecks(pendingFaceChecksRef.current, faceCheckError);
       worker?.terminate();
       worker = null;
     };
@@ -596,7 +596,9 @@ export function useHeadTailDetection(
           : current);
         if (inferenceInFlight) {
           restartAfterVisibility = true;
-          stopInference();
+          const abortError = new Error("画面が非表示になったため、人物チェックを中断しました。");
+          abortError.name = "AbortError";
+          stopInference(abortError);
         }
         return;
       }
