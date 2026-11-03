@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -19,6 +19,7 @@ import {
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const envPath = resolve(projectRoot, ".env");
 const MAX_PILOT_CASES = 60;
+const MAX_IMAGE_BYTES = 520_000;
 
 type CsvRecord = Record<string, string>;
 type PilotCase = {
@@ -193,13 +194,17 @@ async function loadCases(manifestPaths: string[], imagesDirectory: string): Prom
       if (pathFromRoot === ".." || pathFromRoot.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) {
         throw new Error(`frame_pathが画像フォルダーの外を指しています: ${framePath}`);
       }
-      const image = await readFile(imagePath).catch(() => null);
-      if (!image) throw new Error(`画像が見つかりません: ${imagePath}`);
-      if (image.length > 520_000) {
-        throw new Error(`${basename(imagePath)} が520KBを超えています。撮影アプリから保存した832px以下のJPEGを使ってください。`);
-      }
       if (!imagePath.toLowerCase().endsWith(".jpg") && !imagePath.toLowerCase().endsWith(".jpeg")) {
         throw new Error(`${basename(imagePath)} はJPEGではありません。`);
+      }
+      const imageStats = await stat(imagePath).catch(() => null);
+      if (!imageStats?.isFile()) throw new Error(`画像が見つかりません: ${imagePath}`);
+      if (imageStats.size > MAX_IMAGE_BYTES) {
+        throw new Error(`${basename(imagePath)} が520KBを超えています。撮影アプリから保存した832px以下のJPEGを使ってください。`);
+      }
+      const image = await readFile(imagePath);
+      if (image.length > MAX_IMAGE_BYTES) {
+        throw new Error(`${basename(imagePath)} が読み込み中に520KBを超えました。`);
       }
       if (image[0] !== 0xff || image[1] !== 0xd8 || image[2] !== 0xff) {
         throw new Error(`${basename(imagePath)} のJPEGシグネチャを確認できません。`);
