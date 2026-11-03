@@ -704,4 +704,3 @@ export function useHeadTailDetection(
 
   return { ...detection, checkFrameForFace };
 }
-
