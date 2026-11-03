@@ -50,6 +50,22 @@ node_modules/.cache/k6-portable/k6-v2.3.0-windows-amd64/k6.exe run tests/k6/obse
 
 既定値は5 req/sを10秒間です。しきい値は失敗率1%未満、p95 1秒未満、drop 0です。`K6_RATE` と `K6_MAX_VUS` で負荷を調整できます。これは同じローカルDurable Objectに対する動作確認であり、Google Geminiの応答速度やCloudflare本番の処理能力を測るベンチマークではありません。
 
+## 5. UTC日次上限
+
+新しいWorkerと永続化先を使い、日次上限をテスト時だけ1回に下げます。通常のk6設定・本番設定には影響しません。
+
+```powershell
+$env:K6_STATE = Join-Path $env:TEMP ("orewosabake-daily-limit-" + [Guid]::NewGuid().ToString("N"))
+.\node_modules\.bin\wrangler.cmd dev --config apps/web/wrangler.k6.jsonc --port 8787 --inspector-port 0 --persist-to $env:K6_STATE --var GEMINI_TEST_DAILY_ANALYSIS_LIMIT:1
+```
+
+別のPowerShellから偽APIを起動し、2件目の拒否と上流呼び出しが1回だけであることを確認します。
+
+```powershell
+$env:BASE_URL = "http://127.0.0.1:8787"
+node_modules/.cache/k6-portable/k6-v2.3.0-windows-amd64/k6.exe run tests/k6/daily-limit.js
+```
+
 スモーク終了後、偽APIを起動したPowerShellで `Ctrl+C` を押すと、シナリオ別の受信回数が表示されます。
 
 ## 実行結果（2026-11-03）
