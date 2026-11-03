@@ -18,7 +18,7 @@ function errorMessage(error: unknown): string {
 workerScope.addEventListener("message", (event) => {
   const request = event.data;
   if (request.type === "initialize") {
-    initialization ??= MediaPipeFishInference.create(request.modelPath, request.wasmPath, request.fishStageModelPath)
+    initialization ??= MediaPipeFishInference.create(request.modelPath, request.wasmPath, request.fishStageModelPath, request.faceModelPath)
       .then((readyDetector) => {
         detector = readyDetector;
       });
@@ -28,9 +28,40 @@ workerScope.addEventListener("message", (event) => {
         type: "ready",
         fishStageStatus: detector?.fishStagePredictionStatus ?? "unavailable",
         fishStageMessage: detector?.fishStageStatusMessage ?? "工程判定モデルが利用できません。",
+        faceDetectionReady: detector?.faceDetectionReady ?? false,
+        faceDetectionMessage: detector?.faceDetectionStatusMessage ?? "人物チェックモデルを利用できません。",
       }),
       (error: unknown) => workerScope.postMessage({ type: "error", message: errorMessage(error) }),
     );
+    return;
+  }
+
+  if (request.type === "check-face") {
+    if (!detector) {
+      request.bitmap.close();
+      workerScope.postMessage({
+        type: "face-check-error",
+        requestId: request.requestId,
+        message: "人物チェックモデルを起動できません。画像は送信しませんでした。",
+      });
+      return;
+    }
+
+    try {
+      workerScope.postMessage({
+        type: "face-check-result",
+        requestId: request.requestId,
+        detected: detector.detectFacesInBitmap(request.bitmap, request.timestampMs),
+      });
+    } catch (error) {
+      workerScope.postMessage({
+        type: "face-check-error",
+        requestId: request.requestId,
+        message: errorMessage(error),
+      });
+    } finally {
+      request.bitmap.close();
+    }
     return;
   }
 
@@ -45,6 +76,8 @@ workerScope.addEventListener("message", (event) => {
     workerScope.postMessage({
       type: "result",
       observation: result.observation,
+      faceDetectionReady: result.faceDetectionReady,
+      faceDetectionMessage: result.faceDetectionMessage,
       fishStagePrediction: result.fishStagePrediction,
       ...(result.fishStageError ? { fishStageError: result.fishStageError } : {}),
     });

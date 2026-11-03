@@ -1,4 +1,4 @@
-import { useEffect, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { ObservationSchema, type GuideRequest, type Observation } from "@orewosabake/contracts";
 import type { HeadTailWorkerRequest, HeadTailWorkerResponse } from "../model/headTailWorkerProtocol";
 import { fishStageLabel, parseFishStage, type FishStage, type FishStageTransition } from "../model/fishStage";
@@ -9,6 +9,8 @@ export type HeadTailDetection = {
   status: HeadTailDetectionStatus;
   message: string;
   observation: Observation | null;
+  faceDetectionReady: boolean;
+  faceDetectionMessage: string;
   fishStage: FishStageDetection;
 };
 
@@ -22,12 +24,14 @@ export type FishStageDetection = {
 };
 
 const MODEL_PATH = "/models/head-tail.tflite";
+const FACE_MODEL_PATH = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
 const WASM_PATH = "/mediapipe/wasm";
 const INFERENCE_INTERVAL_MS = 1_000;
 const INFERENCE_TIMEOUT_MS = 15_000;
 const INITIALIZATION_TIMEOUT_MS = 90_000;
 const MAX_OBSERVATION_AGE_MS = 2_000;
 const MAX_FRAME_DIMENSION = 832;
+const FACE_CHECK_TIMEOUT_MS = 10_000;
 const FISH_STAGE_MIN_SCORE = 0.7;
 const FISH_STAGE_STABLE_FRAMES = 3;
 const FISH_STAGE_MAX_FRAME_GAP_MS = 2_500;
@@ -47,11 +51,25 @@ const PAUSED_MESSAGE = "画面が非表示のため認識を一時停止して�
 const ERROR_MESSAGE = "認識処理に失敗しました。カメラを再起動してください。";
 const STAGE_IDLE: FishStageDetection = {
   status: "idle",
-  message: "カメラ起動後に工程の変化を確認します。",
+  message: "カメラ起動後に魚の状態を確認します。",
   stage: null,
   score: null,
   transition: null,
 };
+
+type PendingFaceCheck = {
+  resolve: (detected: boolean) => void;
+  reject: (error: Error) => void;
+  timeoutId: number;
+};
+
+function rejectPendingFaceChecks(pending: Map<number, PendingFaceCheck>, error: Error): void {
+  for (const [requestId, request] of pending) {
+    window.clearTimeout(request.timeoutId);
+    request.reject(error);
+    pending.delete(requestId);
+  }
+}
 
 function errorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -66,7 +84,9 @@ function isWorkerResponse(value: unknown): value is HeadTailWorkerResponse {
   if (!isRecord(value) || typeof value.type !== "string") return false;
   if (value.type === "ready") {
     return (value.fishStageStatus === "ready" || value.fishStageStatus === "unavailable" || value.fishStageStatus === "error")
-      && typeof value.fishStageMessage === "string";
+      && typeof value.fishStageMessage === "string"
+      && typeof value.faceDetectionReady === "boolean"
+      && typeof value.faceDetectionMessage === "string";
   }
   if (value.type === "result") {
     const prediction = value.fishStagePrediction;
@@ -77,9 +97,13 @@ function isWorkerResponse(value: unknown): value is HeadTailWorkerResponse {
       && typeof prediction.capturedAt === "string"
     );
     return "observation" in value
+      && typeof value.faceDetectionReady === "boolean"
+      && typeof value.faceDetectionMessage === "string"
       && validPrediction
       && (value.fishStageError === undefined || typeof value.fishStageError === "string");
   }
+  if (value.type === "face-check-result") return typeof value.requestId === "number" && Number.isInteger(value.requestId) && typeof value.detected === "boolean";
+  if (value.type === "face-check-error") return typeof value.requestId === "number" && Number.isInteger(value.requestId) && typeof value.message === "string";
   return value.type === "error" && typeof value.message === "string";
 }
 
@@ -139,17 +163,58 @@ export function useHeadTailDetection(
   videoRef: RefObject<HTMLVideoElement | null>,
   enabled: boolean,
   fishId: GuideRequest["fishId"] | null,
-): HeadTailDetection {
+): HeadTailDetection & { checkFrameForFace: (bitmap: ImageBitmap) => Promise<boolean> } {
   const [detection, setDetection] = useState<HeadTailDetection>({
     status: "idle",
     message: IDLE_MESSAGE,
     observation: null,
+    faceDetectionReady: false,
+    faceDetectionMessage: "カメラ起動後に人物チェックモデルを確認します。",
     fishStage: STAGE_IDLE,
   });
+  const workerRef = useRef<Worker | null>(null);
+  const workerReadyRef = useRef(false);
+  const faceCheckRequestIdRef = useRef(0);
+  const pendingFaceChecksRef = useRef(new Map<number, PendingFaceCheck>());
+
+  const checkFrameForFace = useCallback((bitmap: ImageBitmap) => new Promise<boolean>((resolve, reject) => {
+    const worker = workerRef.current;
+    if (!worker || !workerReadyRef.current) {
+      bitmap.close();
+      reject(new Error("人物チェックモデルを起動できません。画像は送信しませんでした。"));
+      return;
+    }
+
+    const requestId = ++faceCheckRequestIdRef.current;
+    const timeoutId = window.setTimeout(() => {
+      pendingFaceChecksRef.current.delete(requestId);
+      reject(new Error("人物チェックに時間がかかったため、画像は送信しませんでした。"));
+    }, FACE_CHECK_TIMEOUT_MS);
+    pendingFaceChecksRef.current.set(requestId, {
+      resolve,
+      reject,
+      timeoutId,
+    });
+    try {
+      worker.postMessage({
+        type: "check-face",
+        bitmap,
+        timestampMs: performance.now(),
+        requestId,
+      } satisfies HeadTailWorkerRequest, [bitmap]);
+    } catch (error) {
+      window.clearTimeout(timeoutId);
+      pendingFaceChecksRef.current.delete(requestId);
+      bitmap.close();
+      reject(error instanceof Error ? error : new Error("人物チェックを開始できませんでした。"));
+    }
+  }), []);
 
   useEffect(() => {
     if (!enabled) {
-      setDetection({ status: "idle", message: IDLE_MESSAGE, observation: null, fishStage: STAGE_IDLE });
+      workerRef.current = null;
+      workerReadyRef.current = false;
+      setDetection({ status: "idle", message: IDLE_MESSAGE, observation: null, faceDetectionReady: false, faceDetectionMessage: "カメラ起動後に人物チェックモデルを確認します。", fishStage: STAGE_IDLE });
       return;
     }
 
@@ -164,7 +229,7 @@ export function useHeadTailDetection(
     let lastStagePredictionAtMs: number | null = null;
     let lastStageTransition: FishStageTransition | null = null;
     let fishStageStatus: FishStageDetectionStatus = "loading";
-    let fishStageMessage = fishId ? "工程判定モデルを確認しています。" : "この魚は工程判定モデルの対象外です。";
+    let fishStageMessage = fishId ? "魚の状態判定モデルを確認しています。" : "この魚は状態判定モデルの対象外です。";
     let removeVisibilityListener: (() => void) | undefined;
     const initializationController = new AbortController();
 
@@ -172,6 +237,8 @@ export function useHeadTailDetection(
       status: "loading",
       message: "認識モデルを読み込んでいます。",
       observation: null,
+      faceDetectionReady: false,
+      faceDetectionMessage: "人物チェックモデルを読み込んでいます。",
       fishStage: { ...STAGE_IDLE, status: "loading", message: fishStageMessage },
     });
 
@@ -181,25 +248,26 @@ export function useHeadTailDetection(
       intervalId = undefined;
       inferenceTimeoutId = undefined;
       inferenceInFlight = false;
+      workerReadyRef.current = false;
+      if (workerRef.current === worker) workerRef.current = null;
+      rejectPendingFaceChecks(pendingFaceChecksRef.current, new Error("カメラ認識が停止したため、画像は送信しませんでした。"));
       worker?.terminate();
       worker = null;
     };
 
-    const fail = (error: unknown = ERROR_MESSAGE) => {
+    const fail = (error?: unknown) => {
       if (disposed) return;
       stopInference();
       fishStageStatus = "error";
-      fishStageMessage = "工程判定Workerでエラーが発生しました。";
+      fishStageMessage = "魚の状態判定Workerでエラーが発生しました。";
       setDetection({
         status: "error",
-        message: `MediaPipe: ${errorMessage(error)}`,
+        message: error === undefined ? ERROR_MESSAGE : `MediaPipe: ${errorMessage(error)}`,
         observation: null,
+        faceDetectionReady: false,
+        faceDetectionMessage: "人物チェックを利用できません。自動画像確認は停止しています。",
         fishStage: { status: "error", message: fishStageMessage, stage: null, score: null, transition: lastStageTransition },
       });
-    };
-
-    const handleInferenceWorkerError = (event: ErrorEvent) => {
-      fail(event.message || "認識Workerが停止しました。");
     };
 
     const handleFishStagePrediction = (prediction: { label: string; score: number; capturedAt: string } | null | undefined) => {
@@ -213,7 +281,7 @@ export function useHeadTailDetection(
         stableStage = null;
         lastStageTransition = null;
         fishStageStatus = "uncertain";
-        fishStageMessage = "工程をはっきり判定できません。映像を確認してください。";
+        fishStageMessage = "魚の状態をはっきり判定できません。映像を確認してください。";
         setDetection((current) => ({
           ...current,
           fishStage: { status: fishStageStatus, message: fishStageMessage, stage: null, score: null, transition: lastStageTransition },
@@ -243,7 +311,7 @@ export function useHeadTailDetection(
 
       if (stageCandidateCount < FISH_STAGE_STABLE_FRAMES) {
         fishStageStatus = "active";
-        fishStageMessage = `工程候補「${fishStageLabel(stage)}」を確認中（${stageCandidateCount}/${FISH_STAGE_STABLE_FRAMES}回一致）。`;
+        fishStageMessage = `状態候補「${fishStageLabel(stage)}」を確認中（${stageCandidateCount}/${FISH_STAGE_STABLE_FRAMES}回一致）。`;
         setDetection((current) => ({
           ...current,
           fishStage: { status: fishStageStatus, message: fishStageMessage, stage: stableStage, score: null, transition: lastStageTransition },
@@ -256,7 +324,7 @@ export function useHeadTailDetection(
       }
       stableStage = stage;
       fishStageStatus = "active";
-      fishStageMessage = `現在の工程候補：${fishStageLabel(stage)}（${Math.round(prediction.score * 100)}%）。`;
+      fishStageMessage = `現在の状態候補：${fishStageLabel(stage)}（${Math.round(prediction.score * 100)}%）。`;
       setDetection((current) => ({
         ...current,
         fishStage: { status: fishStageStatus, message: fishStageMessage, stage, score: prediction.score, transition: lastStageTransition },
@@ -264,8 +332,19 @@ export function useHeadTailDetection(
     };
 
     const handleWorkerMessage = (event: MessageEvent<unknown>) => {
-      if (!isWorkerResponse(event.data) || event.data.type === "ready") {
-        fail("認識Workerから予期しない応答が返りました。");
+      const data = event.data;
+      if (!isWorkerResponse(data) || data.type === "ready") {
+        fail(new Error("認識Workerから予期しない応答が返りました。"));
+        return;
+      }
+
+      if (data.type === "face-check-result" || data.type === "face-check-error") {
+        const pending = pendingFaceChecksRef.current.get(data.requestId);
+        if (!pending) return;
+        window.clearTimeout(pending.timeoutId);
+        pendingFaceChecksRef.current.delete(data.requestId);
+        if (data.type === "face-check-result") pending.resolve(data.detected);
+        else pending.reject(new Error(data.message || "人物チェックに失敗しました。"));
         return;
       }
 
@@ -273,14 +352,14 @@ export function useHeadTailDetection(
       inferenceTimeoutId = undefined;
       inferenceInFlight = false;
 
-      if (event.data.type === "error") {
-        fail(`MediaPipe推論Workerでエラー: ${event.data.message}`);
+      if (data.type === "error") {
+        fail(new Error(data.message));
         return;
       }
 
-      const parsedObservation = ObservationSchema.safeParse(event.data.observation);
+      const parsedObservation = ObservationSchema.safeParse(data.observation);
       if (!parsedObservation.success) {
-        fail("MediaPipeの検出結果を読み取れません。アプリを再読み込みしてください。");
+        fail(new Error("MediaPipeの検出結果を読み取れません。アプリを再読み込みしてください。"));
         return;
       }
 
@@ -295,6 +374,8 @@ export function useHeadTailDetection(
           status: "paused",
           message: PAUSED_MESSAGE,
           observation: null,
+          faceDetectionReady: data.faceDetectionReady,
+          faceDetectionMessage: data.faceDetectionMessage,
           fishStage: { status: "paused", message: PAUSED_MESSAGE, stage: null, score: null, transition: lastStageTransition },
         }));
         return;
@@ -308,28 +389,37 @@ export function useHeadTailDetection(
         stableStage = null;
         lastStageTransition = null;
         fishStageStatus = "uncertain";
-        fishStageMessage = "推論が遅れたため、工程判定を保留しています。";
+        fishStageMessage = "推論が遅れたため、魚の状態判定を保留しています。";
         setDetection({
           status: "active",
           message: "推論に時間がかかったため、古い検出枠を消して最新映像を確認しています。",
           observation: null,
+          faceDetectionReady: data.faceDetectionReady,
+          faceDetectionMessage: data.faceDetectionMessage,
           fishStage: { status: "uncertain", message: fishStageMessage, stage: null, score: null, transition: lastStageTransition },
         });
         return;
       }
 
-      if (event.data.fishStageError) {
+      if (data.fishStageError) {
         fishStageStatus = "error";
-        fishStageMessage = event.data.fishStageError;
+        fishStageMessage = data.fishStageError;
         setDetection((current) => ({
           ...current,
           fishStage: { status: "error", message: fishStageMessage, stage: null, score: null, transition: lastStageTransition },
         }));
       } else if (fishStageStatus === "active" || fishStageStatus === "uncertain") {
-        handleFishStagePrediction(event.data.fishStagePrediction);
+        handleFishStagePrediction(data.fishStagePrediction);
       }
 
-      setDetection((current) => ({ ...current, status: "active", message: ACTIVE_MESSAGE, observation: parsedObservation.data }));
+      setDetection((current) => ({
+        ...current,
+        status: "active",
+        message: ACTIVE_MESSAGE,
+        observation: parsedObservation.data,
+        faceDetectionReady: data.faceDetectionReady,
+        faceDetectionMessage: data.faceDetectionMessage,
+      }));
     };
 
     const startInference = async () => {
@@ -372,13 +462,13 @@ export function useHeadTailDetection(
         } satisfies HeadTailWorkerRequest, [bitmap]);
         bitmap = null;
         inferenceTimeoutId = window.setTimeout(
-          () => fail(`MediaPipe推論が${INFERENCE_TIMEOUT_MS / 1_000}秒以内に応答しませんでした。`),
+          () => fail(new Error(`MediaPipe推論が${INFERENCE_TIMEOUT_MS / 1_000}秒以内に応答しませんでした。`)),
           INFERENCE_TIMEOUT_MS,
         );
       } catch (error) {
         bitmap?.close();
         inferenceInFlight = false;
-        fail(`カメラ画像を推論Workerへ渡せませんでした: ${errorMessage(error)}`);
+        fail(new Error(`カメラ画像を推論Workerへ渡せませんでした: ${errorMessage(error)}`));
       }
     };
 
@@ -411,7 +501,7 @@ export function useHeadTailDetection(
           } catch {
             fishStageModelPath = undefined;
           }
-          if (!fishStageModelPath) fishStageMessage = "この魚の工程判定モデルは未配置です。確認済みの撮影データで学習すると有効になります。";
+          if (!fishStageModelPath) fishStageMessage = "この魚の状態判定モデルは未配置です。確認済みの撮影データで学習すると有効になります。";
         }
 
         const inferenceWorker = new Worker(
@@ -419,10 +509,13 @@ export function useHeadTailDetection(
           { type: "module", name: "orewosabake-head-tail-inference" },
         );
         worker = inferenceWorker;
+        workerRef.current = inferenceWorker;
+        workerReadyRef.current = false;
         const ready = await waitForWorkerReady(inferenceWorker, initializationController.signal, {
           type: "initialize",
           modelPath: MODEL_PATH,
           wasmPath: WASM_PATH,
+          faceModelPath: FACE_MODEL_PATH,
           ...(fishStageModelPath ? { fishStageModelPath } : {}),
         });
 
@@ -432,16 +525,20 @@ export function useHeadTailDetection(
         if (disposed) {
           inferenceWorker.terminate();
           worker = null;
+          workerRef.current = null;
           return;
         }
 
+        workerReadyRef.current = true;
         inferenceWorker.addEventListener("message", handleWorkerMessage);
-        inferenceWorker.addEventListener("error", handleInferenceWorkerError);
+        inferenceWorker.addEventListener("error", (event) => fail(event.message || "認識Workerが停止しました。"));
         const hidden = document.visibilityState !== "visible";
         setDetection({
           status: hidden ? "paused" : "active",
           message: hidden ? PAUSED_MESSAGE : ACTIVE_MESSAGE,
           observation: null,
+          faceDetectionReady: ready.faceDetectionReady,
+          faceDetectionMessage: ready.faceDetectionMessage,
           fishStage: {
             status: hidden ? "paused" : fishStageStatus,
             message: hidden ? PAUSED_MESSAGE : fishStageMessage,
@@ -461,12 +558,14 @@ export function useHeadTailDetection(
           setDetection({
             status: modelMissing ? "unavailable" : "error",
             message: modelMissing
-              ? `認識モデルの読み込みに失敗しました。${errorMessage(error)}`
+              ? "認識モデルが未配置です。mlの学習手順を実行すると検出が有効になります。"
               : `MediaPipeを初期化できませんでした。${errorMessage(error)}`,
             observation: null,
+            faceDetectionReady: false,
+            faceDetectionMessage: "人物チェックを利用できません。自動画像確認は停止しています。",
             fishStage: {
               status: modelMissing ? "unavailable" : "error",
-              message: modelMissing ? "工程判定は頭・尾検出とは別のモデルが必要です。" : "工程判定を開始できませんでした。",
+              message: modelMissing ? "魚の状態判定には頭・尾検出とは別のモデルが必要です。" : "魚の状態判定を開始できませんでした。",
               stage: null,
               score: null,
               transition: null,
@@ -505,5 +604,5 @@ export function useHeadTailDetection(
     };
   }, [enabled, fishId, videoRef]);
 
-  return detection;
+  return { ...detection, checkFrameForFace };
 }
