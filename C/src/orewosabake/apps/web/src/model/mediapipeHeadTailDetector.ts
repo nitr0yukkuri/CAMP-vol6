@@ -141,9 +141,10 @@ export class MediaPipeFishInference {
     wasmPath = DEFAULT_MEDIAPIPE_WASM_PATH,
     fishStageModelPath?: string,
     faceModelPath = DEFAULT_FACE_MODEL_PATH,
+    useModule = true,
   ): Promise<MediaPipeFishInference> {
-    // ESM WASM glue works in module Workers and in the page-thread fallback for mobile browsers.
-    const wasmFiles = await FilesetResolver.forVisionTasks(wasmPath, true);
+    // Workers use module glue; the page-thread compatibility path can use classic WASM glue.
+    const wasmFiles = await FilesetResolver.forVisionTasks(wasmPath, useModule);
     const faceDetectorTask = (async () => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), FACE_MODEL_DOWNLOAD_TIMEOUT_MS);
