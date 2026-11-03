@@ -1621,10 +1621,6 @@ function App() {
               <div className="guide-stage">
                 <section className="camera-card" aria-label="カメラプレビュー">
                   <div className="camera-topline"><span>カメラプレビュー</span></div>
-                  <div className="guide-fish-bubble" aria-live="polite">
-                    <span className="guide-fish-bubble-copy">{fishTeacherDialogue(currentStep)}</span>
-                    <small className="guide-fish-bubble-status" data-state={guideDetectionStatusState} role="status">{guideDetectionStatus}</small>
-                  </div>
                   {cameraStream ? (
                     <video ref={videoRef} autoPlay muted playsInline aria-label="カメラ映像" />
                   ) : (
@@ -1642,7 +1638,26 @@ function App() {
                     />
                   ) : null}
                 </section>
-
+                <aside className="guide-fish-stage" aria-label={`${chosenFish}先生`}>
+                  <div className="guide-fish-bubble" aria-live="polite">
+                    <span className="guide-fish-bubble-copy">{fishTeacherDialogue(currentStep)}</span>
+                    <small
+                      className="guide-fish-bubble-status"
+                      data-state={guideDetectionStatusState}
+                      role="status"
+                      title={guideDetectionStatusState === "error" ? guideDetectionStatus : undefined}
+                    >
+                      {guideDetectionStatus}
+                    </small>
+                  </div>
+                  {selectedFishVisualData ? (
+                    <img
+                      className={fishImageClass("guide-fish-image")}
+                      src={fishImage(selectedFishVisualData)}
+                      alt={`${selectedFishVisualData.name}先生`}
+                    />
+                  ) : <FishMark />}
+                </aside>
               </div>
 
               <aside className="guide-panel">

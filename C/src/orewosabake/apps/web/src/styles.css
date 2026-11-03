@@ -140,12 +140,14 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .camera-stop-icon { display: block; width: 14px; height: 14px; }
 
 .guide-layout { display: grid; width: 100%; max-width: 1120px; min-height: 0; flex: 1 1 auto; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 12px; align-items: stretch; margin: 0 auto; padding: 8px 18px 12px; }
-.guide-stage { display: grid; min-width: 0; min-height: 0; grid-template-columns: minmax(0, 1fr); gap: 0; align-items: center; }
+.guide-stage { display: grid; min-width: 0; min-height: 0; grid-template-columns: minmax(0, 4fr) minmax(160px, 1fr); gap: 12px; align-items: stretch; }
 .guide-stage > .camera-card { aspect-ratio: 16 / 9; }
-.guide-fish-bubble { position: absolute; z-index: 2; top: 38px; left: 15px; width: max-content; max-width: min(330px, 62%); padding: 8px 11px; border-radius: 13px; color: var(--deep); background: #fff; box-shadow: 0 3px 10px rgba(0, 0, 0, .15); }
-.guide-fish-bubble::after { position: absolute; bottom: -5px; left: 20px; width: 10px; height: 10px; background: #fff; content: ""; transform: rotate(45deg); }
+.guide-fish-stage { display: flex; min-width: 0; min-height: 0; height: 100%; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
+.guide-fish-image { display: block; width: min(100%, 190px); min-height: 0; max-height: 68%; object-fit: contain; filter: drop-shadow(0 8px 10px rgba(0, 0, 0, .18)); }
+.guide-fish-bubble { position: relative; z-index: 2; width: min(100%, 230px); max-height: 40%; flex: 0 0 auto; overflow: hidden; padding: 8px 10px; border-radius: 14px; color: var(--deep); background: #fff; box-shadow: 0 3px 10px rgba(0, 0, 0, .12); text-align: center; }
+.guide-fish-bubble::after { position: absolute; bottom: -5px; left: 50%; width: 10px; height: 10px; background: #fff; content: ""; transform: translateX(-50%) rotate(45deg); }
 .guide-fish-bubble-copy { display: block; font-size: 10px; font-weight: 700; line-height: 1.35; }
-.guide-fish-bubble-status { display: block; margin-top: 4px; color: var(--muted); font-size: 8px; font-weight: 600; line-height: 1.35; }
+.guide-fish-bubble-status { display: block; max-height: min(18vh, 100px); overflow-y: auto; margin-top: 4px; color: var(--muted); font-size: 8px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; scrollbar-width: thin; }
 .guide-fish-bubble-status[data-state="error"], .guide-fish-bubble-status[data-state="unavailable"] { color: var(--action); }
 .guide-fish-bubble-status[data-state="loading"], .guide-fish-bubble-status[data-state="paused"] { color: var(--notice); }
 .guide-fish-bubble-status[data-state="observed"], .guide-fish-bubble-status[data-state="likely_complete"] { color: var(--success); }
@@ -388,11 +390,13 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
   .guide-header-progress { min-width: 96px; }
   .guide-header-progress .guide-progress { width: 90px; }
   .guide-layout { width: 100%; min-height: 0; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 8px; margin: 0 auto; padding: 6px 12px 10px; }
-  .guide-stage { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .guide-stage { grid-template-columns: minmax(0, 3.5fr) minmax(108px, 1fr); gap: 8px; }
   .camera-card { min-height: 0; }
-  .guide-fish-bubble { top: 36px; left: 10px; max-width: min(250px, 68%); padding: 7px 9px; }
+  .guide-fish-stage { gap: 5px; }
+  .guide-fish-image { width: min(100%, 130px); max-height: 58%; }
+  .guide-fish-bubble { width: 100%; max-height: 44%; padding: 6px 7px; }
   .guide-fish-bubble-copy { font-size: 9px; }
-  .guide-fish-bubble-status { font-size: 7px; }
+  .guide-fish-bubble-status { max-height: min(14vh, 64px); font-size: 7px; }
   .guide-panel { min-height: 66px; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) 142px; gap: 7px; padding: 6px 10px; }
   .guide-step h2 { font-size: 13px; }
   .guide-step p { font-size: 10px; }
