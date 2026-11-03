@@ -1,5 +1,6 @@
 import {
   GuideImageAnalysisResponseSchema,
+  GuideImageAnalysisResultSchema,
   type GuideStep,
   type FishId,
   type GuideImageAnalysisResponse,
@@ -100,7 +101,7 @@ export async function analyzeGuideImage(options: {
     payload = await response.json() as typeof payload;
     const text = payload.candidates?.[0]?.content?.parts?.find((part) => part.text)?.text;
     if (!text) throw new Error("Empty Gemini response");
-    const result = GuideImageAnalysisResponseSchema.omit({ model: true }).parse(JSON.parse(text) as unknown);
+    const result = GuideImageAnalysisResultSchema.parse(JSON.parse(text) as unknown);
     return GuideImageAnalysisResponseSchema.parse({ ...result, model });
   } catch {
     throw new GeminiRequestError(502, "GEMINI_INVALID_RESPONSE", "Geminiの回答形式を確認できませんでした。もう一度お試しください。");

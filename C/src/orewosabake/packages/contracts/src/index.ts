@@ -58,7 +58,7 @@ export const GuideImageAnalysisRequestSchema = z.object({
     .regex(/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/, "JPEG形式の画像が必要です。"),
 }).strict();
 
-export const GuideImageAnalysisResponseSchema = z.object({
+const GuideImageAnalysisFieldsSchema = z.object({
   model: z.string().min(1),
   certainty: z.enum(["observed", "uncertain"]),
   visibleParts: z.array(z.enum(["head", "body", "tail"])).max(3),
@@ -69,6 +69,25 @@ export const GuideImageAnalysisResponseSchema = z.object({
   evidence: z.string().max(240),
   caution: z.string().max(180),
 }).strict();
+
+function validateGuideImageAnalysisCertainty(
+  response: { certainty: "observed" | "uncertain"; stepAssessment: { status: "likely_complete" | "in_progress" | "uncertain" } },
+  context: z.RefinementCtx,
+) {
+  if (response.certainty === "uncertain" && response.stepAssessment.status !== "uncertain") {
+    context.addIssue({
+      code: "custom",
+      path: ["stepAssessment", "status"],
+      message: "画像が不確実な場合、工程判定も不確実である必要があります。",
+    });
+  }
+}
+
+export const GuideImageAnalysisResponseSchema = GuideImageAnalysisFieldsSchema
+  .superRefine(validateGuideImageAnalysisCertainty);
+export const GuideImageAnalysisResultSchema = GuideImageAnalysisFieldsSchema
+  .omit({ model: true })
+  .superRefine(validateGuideImageAnalysisCertainty);
 
 export const AdvanceGuideStepRequestSchema = z.object({
   stepId: z.string().min(1),

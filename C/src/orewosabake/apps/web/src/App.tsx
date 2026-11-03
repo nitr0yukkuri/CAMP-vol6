@@ -1381,6 +1381,7 @@ function App() {
     if (geminiAnalysis.error) return "うまく確認できなかったよ。手順を見ながら進めてね";
     if (geminiAnalysis.result) {
       const assessment = geminiAnalysis.result.stepAssessment;
+      if (geminiAnalysis.result.certainty === "uncertain") return "映像だけでは分からないみたい。手元を確認してね";
       if (assessment.status === "likely_complete") return "できていそう！手元も確認して次へ進もう";
       if (assessment.status === "in_progress") return "もう少しだね。手元を見ながら進めよう";
       return "映像だけでは分からないみたい。手元を確認してね";
@@ -1394,7 +1395,7 @@ function App() {
     : geminiAnalysis.error || headTailDetection.status === "error" || headTailDetection.status === "unavailable"
       ? "error"
       : geminiAnalysis.result
-        ? geminiAnalysis.result.stepAssessment.status
+        ? (geminiAnalysis.result.certainty === "uncertain" ? "uncertain" : geminiAnalysis.result.stepAssessment.status)
         : headTailDetection.status;
   return (
     <main className={`app-root ${screen === "guide" ? "is-guide" : screen === "capture" ? "is-capture" : ""}`}>
