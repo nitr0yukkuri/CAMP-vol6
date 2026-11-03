@@ -1,6 +1,8 @@
 import type { FishState } from "@orewosabake/contracts";
 
 export const FISH_STAGE_LABELS = ["whole", "head_removed", "gutted", "filleting", "finished"] as const;
+export const FISH_STAGE_REJECT_LABEL = "unknown" as const;
+export const FISH_STAGE_MODEL_LABELS = [...FISH_STAGE_LABELS, FISH_STAGE_REJECT_LABEL] as const;
 
 export type FishStage = typeof FISH_STAGE_LABELS[number];
 export type FishStageTransition = {
@@ -11,6 +13,7 @@ export type FishStageTransition = {
 
 export function parseFishStage(label: string): FishStage | null {
   const normalized = label.trim().toLowerCase();
+  // The model's optional "unknown" reject class must stay uncertain and never map to a guide state.
   return FISH_STAGE_LABELS.find((stage) => stage === normalized) ?? null;
 }
 

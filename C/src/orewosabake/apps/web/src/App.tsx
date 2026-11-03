@@ -811,7 +811,7 @@ function App() {
       setCaptureMessage("工程モデル用のデータ収集はハマチ・アジ・サバ・タイだけに対応しています。");
       return;
     }
-    if (captureStage === "unknown" || captureStage === "other") {
+    if (captureStage === "unknown") {
       setCaptureMessage("画像に写っている工程を選んでください。");
       return;
     }
@@ -1534,10 +1534,10 @@ function App() {
                 <label className="capture-field"><span>端末機種（任意）</span><input value={captureDeviceModel} onChange={(event) => { setCaptureDeviceModel(event.currentTarget.value);  }} maxLength={120} placeholder="不明（任意）" /></label>
               </div>
 
-              <button className="capture-export-button" type="button" onClick={() => void saveStageCaptureFrame()} disabled={!stageCaptureSupported || cameraStatus !== "active" || captureBusy || captureRows.length >= MAX_CAPTURE_FRAMES || captureStage === "unknown" || captureStage === "other"}>
+              <button className="capture-export-button" type="button" onClick={() => void saveStageCaptureFrame()} disabled={!stageCaptureSupported || cameraStatus !== "active" || captureBusy || captureRows.length >= MAX_CAPTURE_FRAMES || captureStage === "unknown"}>
                 {captureBusy ? "保存中…" : "工程画像を保存（頭・尾の枠なし）"}
               </button>
-              <p className="capture-label-hint">{stageCaptureSupported ? "工程分類のデータを集める場合はこちら。画像と工程ラベルが一致するか保存前に確認し、ほかの項目は「不明」で記録します。" : "工程分類用の撮影はハマチ・アジ・サバ・タイが対象です。魚種別ガイドは利用できます。"}</p>
+              <p className="capture-label-hint">{stageCaptureSupported ? "工程分類のデータを集める場合はこちら。画像と工程ラベルが一致するか保存前に確認します。「その他」は5つの対象工程に当てはまらない魚の画像として記録します。" : "工程分類用の撮影はハマチ・アジ・サバ・タイが対象です。魚種別ガイドは利用できます。"}</p>
               <div className="capture-field-grid capture-presence-grid">
                 <label className="capture-field"><span>手の映り込み</span><select value={captureHandsVisible} onChange={(event) => { setCaptureHandsVisible(event.currentTarget.value as PresenceStatus);  }}><option value="unknown">不明</option><option value="true">映っている</option><option value="false">映っていない</option></select></label>
                 <label className="capture-field"><span>包丁の映り込み</span><select value={captureKnifeVisible} onChange={(event) => { setCaptureKnifeVisible(event.currentTarget.value as PresenceStatus);  }}><option value="unknown">不明</option><option value="true">映っている</option><option value="false">映っていない</option></select></label>

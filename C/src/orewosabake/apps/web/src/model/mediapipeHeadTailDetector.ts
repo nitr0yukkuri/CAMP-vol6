@@ -7,7 +7,7 @@ import {
   type ObjectDetectorResult,
 } from "@mediapipe/tasks-vision";
 import { ObservationSchema, type Observation } from "@orewosabake/contracts";
-import { FISH_STAGE_LABELS, parseFishStage } from "./fishStage";
+import { FISH_STAGE_MODEL_LABELS, parseFishStage } from "./fishStage";
 
 const DEFAULT_MEDIAPIPE_WASM_PATH = "/mediapipe/wasm";
 const DEFAULT_FACE_MODEL_PATH = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
@@ -208,7 +208,8 @@ export class MediaPipeFishInference {
       const fishStageClassifier = await ImageClassifier.createFromOptions(wasmFiles, {
         baseOptions: { modelAssetPath: fishStageModelPath },
         runningMode: "VIDEO",
-        maxResults: FISH_STAGE_LABELS.length,
+        // Keep the optional `unknown` reject category visible to runtime scoring.
+        maxResults: FISH_STAGE_MODEL_LABELS.length,
       });
       return new MediaPipeFishInference(detector, faceDetector, fishStageClassifier, "ready", undefined, faceDetectionError);
     } catch (error) {

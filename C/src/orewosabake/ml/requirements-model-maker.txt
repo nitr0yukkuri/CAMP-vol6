@@ -1,6 +1,8 @@
 # MediaPipe's documented transfer-learning route; use a Python 3.10 venv.
 # Google marks MediaPipe Model Maker deprecated and no longer actively maintained.
 mediapipe-model-maker==0.2.1.4
+# Read transparent PNG masks and composite training-only background variants.
+Pillow>=10,<12
 # Model Maker 0.2.1.4 uses MediaPipe's pre-1.0 metadata-writer package layout.
 mediapipe==0.10.21
 # Keep generated metadata protos compatible with TensorFlow 2.15's protobuf 4 runtime.
