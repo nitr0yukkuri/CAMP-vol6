@@ -32,6 +32,13 @@ interface Env {
   GUIDE_SESSIONS: DurableObjectNamespace<GuideSessionStore>;
   GEMINI_API_KEY?: string;
   GEMINI_MODEL?: string;
+  GEMINI_TEST_MODE?: string;
+  GEMINI_TEST_API_URL?: string;
+  GEMINI_TEST_TIMEOUT_MS?: string;
+  GEMINI_TEST_OVERALL_TIMEOUT_MS?: string;
+  GEMINI_TEST_MAX_ATTEMPTS?: string;
+  GEMINI_TEST_RETRY_BASE_DELAY_MS?: string;
+  GEMINI_TEST_ANALYSIS_LIMIT?: string;
 }
 
 class RequestError extends Error {
@@ -71,7 +78,8 @@ export default {
       }));
       if (!limitResponse.ok) return errorResponse(429, "GEMINI_RATE_LIMITED", "画像確認の回数が上限に達しました。1分ほど待ってから再試行してください。");
       try {
-        return json(await analyzeWithGemini(env, parsed.data.fishId, step.title, step.description, step.expectedState, base64));
+        const testScenario = env.GEMINI_TEST_MODE === "true" ? request.headers.get("x-k6-scenario") : null;
+        return json(await analyzeWithGemini(env, parsed.data.fishId, step.title, step.description, step.expectedState, base64, testScenario));
       } catch (error) {
         if (error instanceof RequestError) return errorResponse(error.status, error.code, error.message);
         return errorResponse(502, "GEMINI_UPSTREAM_ERROR", "Gemini APIから応答を取得できませんでした。");
@@ -202,7 +210,10 @@ export class GuideSessionStore extends DurableObject<Env> {
           "SELECT request_count, window_started_at FROM guide_image_analysis_limits WHERE client_hash = ?",
           clientHash,
         ).toArray()[0];
-        if (limit && limit.request_count >= analysisRateLimitCount) return errorResponse(429, "GEMINI_RATE_LIMITED", "画像確認の回数が上限に達しました。");
+        const requestLimit = this.env.GEMINI_TEST_MODE === "true"
+          ? readTestInteger(this.env.GEMINI_TEST_ANALYSIS_LIMIT, 1_000, 1, 10_000)
+          : analysisRateLimitCount;
+        if (limit && limit.request_count >= requestLimit) return errorResponse(429, "GEMINI_RATE_LIMITED", "画像確認の回数が上限に達しました。");
         if (limit) {
           this.ctx.storage.sql.exec("UPDATE guide_image_analysis_limits SET request_count = request_count + 1 WHERE client_hash = ?", clientHash);
         } else {
@@ -467,78 +478,197 @@ async function analyzeWithGemini(
   stepDescription: string,
   stepExpectedState: string,
   imageBase64: string,
+  testScenario: string | null,
 ): Promise<GuideImageAnalysisResponse> {
   if (!env.GEMINI_API_KEY) {
     throw new RequestError(503, "GEMINI_NOT_CONFIGURED", "Gemini APIキーが設定されていません。apps/web/.dev.varsのGEMINI_API_KEYを確認してください。");
   }
   const model = env.GEMINI_MODEL?.trim() || "gemini-3.5-flash-lite";
-  let response: Response;
-  try {
-    response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [
-          { text: [
-            "あなたは魚の調理工程を補助する画像確認役です。回答は日本語で、指定されたJSON形式だけにしてください。",
-            "画像から直接見える事実だけを短く述べてください。魚種、鮮度、食用安全性、骨の完全な除去を保証してはいけません。",
-            "visiblePartsでは画像内にはっきり見える頭・体・尾だけを返してください。",
-            "stepAssessment.status は、この画像の見た目が現在の工程をどこまで示しているかを慎重に推定してください。",
-            "likely_complete は工程完了を示す明確な見た目の証拠がある場合だけ、in_progress は明確に未完了と分かる場合だけにしてください。それ以外は uncertain にしてください。",
-            "うろこ取りや小骨確認など、画像だけで作業結果を確かめられない工程は uncertain にしてください。期待状態のラベルだけから完了を推測してはいけません。",
-            "工程の完了や安全性を保証せず、次の工程へ進めてもいけません。進行は利用者が操作します。",
-            "不鮮明、隠れている、画角外など判断できない場合は certainty と stepAssessment.status の両方を uncertain にしてください。",
-            `魚種ID: ${fishId}`,
-            `確認中の工程: ${stepTitle}`,
-            `表示中の参考ガイドの説明: ${stepDescription}`,
-            `この工程の目安状態: ${stepExpectedState}`,
-            "stepAssessment.evidence は工程の見た目について、画像で確認できた短い根拠を書いてください。evidence は見える部位の根拠、caution は必要な場合の短い注意です。",
-          ].join("\n") },
-          { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
-        ] }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: {
+  const testMode = env.GEMINI_TEST_MODE === "true";
+  const endpoint = geminiEndpoint(env, model, testMode);
+  const maxAttempts = testMode ? readTestInteger(env.GEMINI_TEST_MAX_ATTEMPTS, 2, 1, 3) : 2;
+  const attemptTimeoutMs = testMode ? readTestInteger(env.GEMINI_TEST_TIMEOUT_MS, 30_000, 50, 30_000) : 30_000;
+  const overallTimeoutMs = testMode ? readTestInteger(env.GEMINI_TEST_OVERALL_TIMEOUT_MS, 35_000, 100, 35_000) : 35_000;
+  const retryBaseDelayMs = testMode ? readTestInteger(env.GEMINI_TEST_RETRY_BASE_DELAY_MS, 250, 1, 2_000) : 250;
+  const deadline = Date.now() + overallTimeoutMs;
+  const requestBody = JSON.stringify({
+    contents: [{ role: "user", parts: [
+      { text: [
+        "あなたは魚の調理工程を補助する画像確認役です。回答は日本語で、指定されたJSON形式だけにしてください。",
+        "画像から直接見える事実だけを短く述べてください。魚種、鮮度、食用安全性、骨の完全な除去を保証してはいけません。",
+        "visiblePartsでは画像内にはっきり見える頭・体・尾だけを返してください。",
+        "stepAssessment.status は、この画像の見た目が現在の工程をどこまで示しているかを慎重に推定してください。",
+        "likely_complete は工程完了を示す明確な見た目の証拠がある場合だけ、in_progress は明確に未完了と分かる場合だけにしてください。それ以外は uncertain にしてください。",
+        "うろこ取りや小骨確認など、画像だけで作業結果を確かめられない工程は uncertain にしてください。期待状態のラベルだけから完了を推測してはいけません。",
+        "工程の完了や安全性を保証せず、次の工程へ進めてもいけません。進行は利用者が操作します。",
+        "不鮮明、隠れている、画角外など判断できない場合は certainty と stepAssessment.status の両方を uncertain にしてください。",
+        `魚種ID: ${fishId}`,
+        `確認中の工程: ${stepTitle}`,
+        `表示中の参考ガイドの説明: ${stepDescription}`,
+        `この工程の目安状態: ${stepExpectedState}`,
+        "stepAssessment.evidence は工程の見た目について、画像で確認できた短い根拠を書いてください。evidence は見える部位の根拠、caution は必要な場合の短い注意です。",
+      ].join("\n") },
+      { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
+    ] }],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "OBJECT",
+        properties: {
+          certainty: { type: "STRING", enum: ["observed", "uncertain"] },
+          visibleParts: { type: "ARRAY", items: { type: "STRING", enum: ["head", "body", "tail"] } },
+          stepAssessment: {
             type: "OBJECT",
             properties: {
-              certainty: { type: "STRING", enum: ["observed", "uncertain"] },
-              visibleParts: { type: "ARRAY", items: { type: "STRING", enum: ["head", "body", "tail"] } },
-              stepAssessment: {
-                type: "OBJECT",
-                properties: {
-                  status: { type: "STRING", enum: ["likely_complete", "in_progress", "uncertain"] },
-                  evidence: { type: "STRING" },
-                },
-                required: ["status", "evidence"],
-                propertyOrdering: ["status", "evidence"],
-              },
+              status: { type: "STRING", enum: ["likely_complete", "in_progress", "uncertain"] },
               evidence: { type: "STRING" },
-              caution: { type: "STRING" },
             },
-            required: ["certainty", "visibleParts", "stepAssessment", "evidence", "caution"],
-            propertyOrdering: ["certainty", "visibleParts", "stepAssessment", "evidence", "caution"],
+            required: ["status", "evidence"],
+            propertyOrdering: ["status", "evidence"],
           },
+          evidence: { type: "STRING" },
+          caution: { type: "STRING" },
         },
-      }),
-      signal: AbortSignal.timeout(30_000),
-    });
-  } catch {
-    throw new RequestError(504, "GEMINI_TIMEOUT", "Geminiへの接続がタイムアウトしました。少し待ってから再試行してください。");
+        required: ["certainty", "visibleParts", "stepAssessment", "evidence", "caution"],
+        propertyOrdering: ["certainty", "visibleParts", "stepAssessment", "evidence", "caution"],
+      },
+    },
+  });
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) throw geminiTimeoutError();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), Math.min(attemptTimeoutMs, remainingMs));
+    const headers = new Headers({ "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY });
+    if (testMode && testScenario && /^[a-z0-9_-]{1,40}$/i.test(testScenario)) headers.set("x-k6-scenario", testScenario);
+    let response: Response;
+    let responseText: string;
+    try {
+      response = await fetch(endpoint, { method: "POST", headers, body: requestBody, signal: controller.signal });
+      responseText = await response.text();
+    } catch {
+      clearTimeout(timeoutId);
+      const delayMs = retryBaseDelayMs * 2 ** (attempt - 1);
+      if (attempt < maxAttempts && deadline - Date.now() > delayMs + 50) {
+        await delayGeminiRetry(delayMs);
+        continue;
+      }
+      if (controller.signal.aborted || Date.now() >= deadline) throw geminiTimeoutError();
+      throw new RequestError(502, "GEMINI_UPSTREAM_ERROR", "Gemini APIへ接続できませんでした。時間をおいて再試行してください。");
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    let payload: GeminiGenerateContentResponse | null = null;
+    try {
+      payload = JSON.parse(responseText) as GeminiGenerateContentResponse;
+    } catch {
+      // Invalid upstream JSON is reported below and is not retried.
+    }
+
+    if (!response.ok) {
+      const retryDelayMs = geminiRetryDelay(response, payload, attempt, retryBaseDelayMs);
+      if (retryDelayMs !== null && attempt < maxAttempts && deadline - Date.now() > retryDelayMs + 50) {
+        await delayGeminiRetry(retryDelayMs);
+        continue;
+      }
+      if (response.status === 401 || response.status === 403) {
+        throw new RequestError(502, "GEMINI_AUTH_FAILED", "Gemini APIキーを確認できませんでした。キー設定とGoogle AI Studioの利用権限を確認してください。");
+      }
+      if (response.status === 429 && isGeminiQuotaError(payload)) {
+        throw new RequestError(429, "GEMINI_QUOTA_EXCEEDED", "Gemini APIの利用枠を超えました。利用枠と請求設定を確認してください。");
+      }
+      if (response.status === 429) {
+        throw new RequestError(429, "GEMINI_RATE_LIMITED", "Gemini APIの呼出し制限に達しました。時間をおいて再試行してください。");
+      }
+      throw new RequestError(502, "GEMINI_UPSTREAM_ERROR", "Gemini APIから応答を取得できませんでした。モデル名とAPIの状態を確認してください。");
+    }
+
+    try {
+      const text = payload?.candidates?.[0]?.content?.parts?.find((part) => part.text)?.text;
+      if (!text) throw new Error("Empty Gemini response");
+      const result = GuideImageAnalysisResponseSchema.omit({ model: true }).parse(JSON.parse(text) as unknown);
+      return GuideImageAnalysisResponseSchema.parse({ ...result, model });
+    } catch {
+      throw new RequestError(502, "GEMINI_INVALID_RESPONSE", "Geminiの回答形式を確認できませんでした。もう一度お試しください。");
+    }
   }
-  if (!response.ok) {
-    if (response.status === 401 || response.status === 403) throw new RequestError(502, "GEMINI_AUTH_FAILED", "Gemini APIキーを確認できませんでした。キー設定とGoogle AI Studioの利用権限を確認してください。");
-    if (response.status === 429) throw new RequestError(429, "GEMINI_RATE_LIMITED", "Gemini APIの利用上限に達しました。時間をおいて再試行してください。");
-    throw new RequestError(502, "GEMINI_UPSTREAM_ERROR", "Gemini APIから応答を取得できませんでした。モデル名とAPIの状態を確認してください。");
-  }
+  throw geminiTimeoutError();
+}
+
+type GeminiGenerateContentResponse = {
+  error?: { code?: number; status?: string; message?: string; details?: unknown };
+  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+};
+
+function geminiEndpoint(env: Env, model: string, testMode: boolean): string {
+  if (!testMode) return `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   try {
-    const payload = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-    const text = payload.candidates?.[0]?.content?.parts?.find((part) => part.text)?.text;
-    if (!text) throw new Error("Empty Gemini response");
-    const result = GuideImageAnalysisResponseSchema.omit({ model: true }).parse(JSON.parse(text) as unknown);
-    return GuideImageAnalysisResponseSchema.parse({ ...result, model });
+    const endpoint = new URL(env.GEMINI_TEST_API_URL ?? "");
+    const allowedHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
+    const expectedPath = `/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+    if (endpoint.protocol !== "http:" || !allowedHosts.has(endpoint.hostname.toLowerCase())
+      || endpoint.pathname !== expectedPath || endpoint.search || endpoint.hash || endpoint.username || endpoint.password) {
+      throw new Error("The test endpoint must be a local GenerateContent URL for the configured model.");
+    }
+    return endpoint.toString();
   } catch {
-    throw new RequestError(502, "GEMINI_INVALID_RESPONSE", "Geminiの回答形式を確認できませんでした。もう一度お試しください。");
+    throw new RequestError(503, "GEMINI_TEST_ENDPOINT_INVALID", "ローカルGeminiテストURLはlocalhostのGenerateContentエンドポイントにしてください。");
   }
+}
+
+function readTestInteger(value: string | undefined, fallback: number, minimum: number, maximum: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new RequestError(503, "GEMINI_TEST_CONFIG_INVALID", "ローカルGeminiテスト設定の数値範囲を確認してください。");
+  }
+  return parsed;
+}
+
+function isGeminiQuotaError(payload: GeminiGenerateContentResponse | null): boolean {
+  const error = payload?.error;
+  const description = `${error?.status ?? ""} ${error?.message ?? ""} ${JSON.stringify(error?.details ?? "")}`.toLowerCase();
+  return /quota[_ -]?exceeded|daily quota|per[_ ]day|spend[_ -]?cap|billing/.test(description);
+}
+
+function geminiRetryDelay(
+  response: Response,
+  payload: GeminiGenerateContentResponse | null,
+  attempt: number,
+  baseDelayMs: number,
+): number | null {
+  if (response.status !== 429 && (response.status < 500 || response.status > 599 || response.status === 501)) return null;
+  if (response.status === 429 && isGeminiQuotaError(payload)) return null;
+  if (response.status === 429) {
+    const status = payload?.error?.status?.toLowerCase() ?? "";
+    const message = payload?.error?.message?.toLowerCase() ?? "";
+    const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
+    const appearsTransient = retryAfterMs !== null
+      || /rate.?limit|too many requests|resource_exhausted|requests per minute|tokens per minute|\brpm\b|\btpm\b/.test(`${status} ${message}`);
+    if (!appearsTransient) return null;
+    if (retryAfterMs !== null) return retryAfterMs <= 2_000 ? retryAfterMs : null;
+  }
+  const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
+  if (retryAfterMs !== null) return retryAfterMs <= 2_000 ? retryAfterMs : null;
+  return Math.min(2_000, baseDelayMs * 2 ** (attempt - 1));
+}
+
+function parseRetryAfter(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : null;
+}
+
+function delayGeminiRetry(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function geminiTimeoutError(): RequestError {
+  return new RequestError(504, "GEMINI_TIMEOUT", "Geminiへの接続がタイムアウトしました。少し待ってから再試行してください。");
 }
 
 function json(body: unknown, status = 200): Response {
