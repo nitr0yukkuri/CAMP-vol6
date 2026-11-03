@@ -1428,9 +1428,6 @@ function App() {
               <strong>俺を捌け！</strong>
               <span>{selectedGuideFishId === "other_finfish" ? "基本の三枚おろしで進む" : selectedGuideFishId ? "この魚を捌く" : "この魚の手順は準備中"}</span>
             </button>
-            <button className="capture-entry-button" type="button" disabled={!fishCanContinue} onClick={startCapture}>
-              研究用データを撮る
-            </button>
           </div>
         </section>
       ) : screen === "capture" ? (
