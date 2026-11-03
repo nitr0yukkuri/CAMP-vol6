@@ -608,7 +608,7 @@ async function analyzeWithGemini(
       if (response.status === 401 || response.status === 403) {
         throw new RequestError(502, "GEMINI_AUTH_FAILED", "Gemini APIキーを確認できませんでした。キー設定とGoogle AI Studioの利用権限を確認してください。");
       }
-      if (response.status === 429 && isGeminiQuotaError(payload)) {
+      if (response.status === 429 && isGeminiDailyQuotaError(payload)) {
         throw new RequestError(429, "GEMINI_QUOTA_EXCEEDED", "Gemini APIの利用枠を超えました。利用枠と請求設定を確認してください。");
       }
       if (response.status === 429) {
@@ -668,10 +668,40 @@ function readConfiguredDailyAnalysisLimit(value: string | undefined): number {
   return parsed;
 }
 
-function isGeminiQuotaError(payload: GeminiGenerateContentResponse | null): boolean {
+function isGeminiDailyQuotaError(payload: GeminiGenerateContentResponse | null): boolean {
   const error = payload?.error;
-  const description = `${error?.status ?? ""} ${error?.message ?? ""} ${JSON.stringify(error?.details ?? "")}`.toLowerCase();
-  return /quota[_ -]?exceeded|daily quota|per[_ ]day|spend[_ -]?cap|billing/.test(description);
+  const status = error?.status?.toLowerCase() ?? "";
+  const description = (error?.message ?? "") + " " + JSON.stringify(error?.details ?? "");
+  return status === "quota_exceeded"
+    || /\bdaily quota\b|per[_ ]?day|requestsperday|tokensperday|\brpd\b/i.test(description);
+}
+
+function isGeminiErrorRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseGeminiRetryInfoDelay(payload: GeminiGenerateContentResponse | null): number | null {
+  const details = payload?.error?.details;
+  if (!Array.isArray(details)) return null;
+  for (const detail of details) {
+    if (!isGeminiErrorRecord(detail)
+      || typeof detail["@type"] !== "string"
+      || !detail["@type"].endsWith("google.rpc.RetryInfo")) continue;
+    const retryDelay = detail.retryDelay;
+    if (typeof retryDelay === "string") {
+      const match = /^(\d+(?:\.\d{1,9})?)s$/.exec(retryDelay.trim());
+      if (!match) return null;
+      const milliseconds = Number(match[1]) * 1_000;
+      return Number.isFinite(milliseconds) && milliseconds >= 0 ? Math.ceil(milliseconds) : null;
+    }
+    if (!isGeminiErrorRecord(retryDelay) || (!("seconds" in retryDelay) && !("nanos" in retryDelay))) return null;
+    const seconds = Number(retryDelay.seconds ?? 0);
+    const nanos = Number(retryDelay.nanos ?? 0);
+    if (!Number.isFinite(seconds) || !Number.isFinite(nanos) || seconds < 0 || nanos < 0 || nanos >= 1_000_000_000) return null;
+    const milliseconds = seconds * 1_000 + nanos / 1_000_000;
+    return Number.isFinite(milliseconds) ? Math.ceil(milliseconds) : null;
+  }
+  return null;
 }
 
 function geminiRetryDelay(
@@ -681,25 +711,30 @@ function geminiRetryDelay(
   baseDelayMs: number,
 ): number | null {
   if (response.status !== 429 && (response.status < 500 || response.status > 599 || response.status === 501)) return null;
-  if (response.status === 429 && isGeminiQuotaError(payload)) return null;
+  if (response.status === 429 && isGeminiDailyQuotaError(payload)) return null;
+
+  const retryHints = [
+    parseRetryAfter(response.headers.get("retry-after")),
+    parseGeminiRetryInfoDelay(payload),
+  ].filter((delay): delay is number => delay !== null);
+  if (retryHints.length > 0) {
+    const retryDelayMs = Math.max(...retryHints);
+    return retryDelayMs <= 2_000 ? retryDelayMs : null;
+  }
+
   if (response.status === 429) {
     const status = payload?.error?.status?.toLowerCase() ?? "";
     const message = payload?.error?.message?.toLowerCase() ?? "";
-    const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
-    const appearsTransient = retryAfterMs !== null
-      || /rate.?limit|too many requests|resource_exhausted|requests per minute|tokens per minute|\brpm\b|\btpm\b/.test(`${status} ${message}`);
+    const appearsTransient = /rate.?limit|too many requests|resource_exhausted|requests per minute|tokens per minute|\brpm\b|\btpm\b/.test(status + " " + message);
     if (!appearsTransient) return null;
-    if (retryAfterMs !== null) return retryAfterMs <= 2_000 ? retryAfterMs : null;
   }
-  const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
-  if (retryAfterMs !== null) return retryAfterMs <= 2_000 ? retryAfterMs : null;
   return Math.min(2_000, baseDelayMs * 2 ** (attempt - 1));
 }
 
 function parseRetryAfter(value: string | null): number | null {
   if (!value) return null;
   const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1_000);
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : null;
 }
