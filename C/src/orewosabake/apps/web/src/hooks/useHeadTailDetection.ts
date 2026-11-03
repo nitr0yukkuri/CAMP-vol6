@@ -173,12 +173,21 @@ export function useHeadTailDetection(
     faceDetectionMessage: "カメラ起動後に人物チェックモデルを確認します。",
     fishStage: STAGE_IDLE,
   });
+  const [workerRestartKey, setWorkerRestartKey] = useState(0);
   const workerRef = useRef<Worker | null>(null);
   const workerReadyRef = useRef(false);
   const faceCheckRequestIdRef = useRef(0);
   const pendingFaceChecksRef = useRef(new Map<number, PendingFaceCheck>());
 
   const checkFrameForFace = useCallback((bitmap: ImageBitmap) => new Promise<boolean>((resolve, reject) => {
+    if (document.visibilityState !== "visible") {
+      bitmap.close();
+      const abortError = new Error("画面が非表示のため人物チェックを開始しませんでした。");
+      abortError.name = "AbortError";
+      reject(abortError);
+      return;
+    }
+
     const worker = workerRef.current;
     if (!worker || !workerReadyRef.current) {
       bitmap.close();
@@ -220,6 +229,7 @@ export function useHeadTailDetection(
     }
 
     let disposed = false;
+    let restartAfterVisibility = false;
     let inferenceInFlight = false;
     let intervalId: number | undefined;
     let inferenceTimeoutId: number | undefined;
@@ -243,7 +253,7 @@ export function useHeadTailDetection(
       fishStage: { ...STAGE_IDLE, status: "loading", message: fishStageMessage },
     });
 
-    const stopInference = () => {
+    const stopInference = (faceCheckError = new Error("カメラ認識が停止したため、画像は送信しませんでした。")) => {
       if (intervalId !== undefined) window.clearInterval(intervalId);
       if (inferenceTimeoutId !== undefined) window.clearTimeout(inferenceTimeoutId);
       intervalId = undefined;
@@ -251,7 +261,7 @@ export function useHeadTailDetection(
       inferenceInFlight = false;
       workerReadyRef.current = false;
       if (workerRef.current === worker) workerRef.current = null;
-      rejectPendingFaceChecks(pendingFaceChecksRef.current, new Error("カメラ認識が停止したため、画像は送信しませんでした。"));
+      rejectPendingFaceChecks(pendingFaceChecksRef.current, faceCheckError);
       worker?.terminate();
       worker = null;
     };
@@ -333,6 +343,7 @@ export function useHeadTailDetection(
     };
 
     const handleWorkerMessage = (event: MessageEvent<unknown>) => {
+      if (disposed || !worker || worker !== workerRef.current) return;
       const data = event.data;
       if (!isWorkerResponse(data) || data.type === "ready") {
         fail(new Error("認識Workerから予期しない応答が返りました。"));
@@ -469,7 +480,9 @@ export function useHeadTailDetection(
       } catch (error) {
         bitmap?.close();
         inferenceInFlight = false;
-        fail(new Error(`カメラ画像を推論Workerへ渡せませんでした: ${errorMessage(error)}`));
+        if (!restartAfterVisibility) {
+          fail(new Error(`カメラ画像を推論Workerへ渡せませんでした: ${errorMessage(error)}`));
+        }
       }
     };
 
@@ -532,7 +545,10 @@ export function useHeadTailDetection(
 
         workerReadyRef.current = true;
         inferenceWorker.addEventListener("message", handleWorkerMessage);
-        inferenceWorker.addEventListener("error", (event) => fail(event.message || "認識Workerが停止しました。"));
+        inferenceWorker.addEventListener("error", (event) => {
+          if (disposed || worker !== inferenceWorker || workerRef.current !== inferenceWorker) return;
+          fail(event.message || "認識Workerが停止しました。");
+        });
         const hidden = document.visibilityState !== "visible";
         setDetection({
           status: hidden ? "paused" : "active",
@@ -586,6 +602,17 @@ export function useHeadTailDetection(
         setDetection((current) => current.status === "active"
           ? { ...current, status: "paused", message: PAUSED_MESSAGE, observation: null, fishStage: { status: "paused", message: PAUSED_MESSAGE, stage: null, score: null, transition: lastStageTransition } }
           : current);
+        if (inferenceInFlight || pendingFaceChecksRef.current.size > 0) {
+          restartAfterVisibility = true;
+          const abortError = new Error("画面が非表示になったため、人物チェックを中断しました。");
+          abortError.name = "AbortError";
+          stopInference(abortError);
+        }
+        return;
+      }
+
+      if (restartAfterVisibility) {
+        setWorkerRestartKey((current) => current + 1);
         return;
       }
 
@@ -603,7 +630,7 @@ export function useHeadTailDetection(
       removeVisibilityListener?.();
       stopInference();
     };
-  }, [enabled, fishId, retryKey, videoRef]);
+  }, [enabled, fishId, retryKey, videoRef, workerRestartKey]);
 
   return { ...detection, checkFrameForFace };
 }
