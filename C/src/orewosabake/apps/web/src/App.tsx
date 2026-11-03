@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 22020)
-Total output lines: 1751
-
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { AdvanceGuideStepRequestSchema, getPreparationIdForFish, getReferenceGuide, GuideImageAnalysisResponseSchema, GuideRequestSchema, GuideSessionSchema, resolveGuideFishId, type GuideImageAnalysisResponse, type GuideRequest, type GuideSession, type Observation } from "@orewosabake/contracts";
 import { useHeadTailDetection, type HeadTailDetectionStatus } from "./hooks/useHeadTailDetection";
@@ -909,7 +906,218 @@ function App() {
     return fishStageLabel(stage);
   }
 
-  function annotationPoint(event: ReactP…2020 tokens truncated…ocked(false);
+  function annotationPoint(event: ReactPointerEvent<SVGSVGElement>) {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)),
+    };
+  }
+
+  function annotationPointerDown(event: ReactPointerEvent<SVGSVGElement>) {
+    if (!pendingCapture) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const point = annotationPoint(event);
+    setPendingCapture((current) => current ? {
+      ...current,
+      dragStart: point,
+      draftBox: { x: point.x, y: point.y, width: 0, height: 0 },
+    } : current);
+  }
+
+  function annotationPointerMove(event: ReactPointerEvent<SVGSVGElement>) {
+    if (!pendingCapture?.dragStart) return;
+    const point = annotationPoint(event);
+    const start = pendingCapture.dragStart;
+    setPendingCapture((current) => current ? {
+      ...current,
+      draftBox: {
+        x: Math.min(start.x, point.x),
+        y: Math.min(start.y, point.y),
+        width: Math.abs(point.x - start.x),
+        height: Math.abs(point.y - start.y),
+      },
+    } : current);
+  }
+
+  function finishAnnotationPointer(event: ReactPointerEvent<SVGSVGElement>) {
+    if (!pendingCapture?.dragStart) return;
+    const point = annotationPoint(event);
+    const start = pendingCapture.dragStart;
+    const box = {
+      x: Math.min(start.x, point.x),
+      y: Math.min(start.y, point.y),
+      width: Math.abs(point.x - start.x),
+      height: Math.abs(point.y - start.y),
+    };
+    const normalizedBox = box.width >= 0.005 && box.height >= 0.005 ? box : null;
+    setPendingCapture((current) => current ? {
+      ...current,
+      dragStart: null,
+      draftBox: null,
+      headBox: current.activePart === "head" && normalizedBox ? normalizedBox : current.headBox,
+      tailBox: current.activePart === "tail" && normalizedBox ? normalizedBox : current.tailBox,
+    } : current);
+  }
+
+  function cancelAnnotationPointer() {
+    setPendingCapture((current) => current ? { ...current, dragStart: null, draftBox: null } : current);
+  }
+
+  function clearAnnotation(part: CapturePart) {
+    setPendingCapture((current) => current ? {
+      ...current,
+      headBox: part === "head" ? null : current.headBox,
+      tailBox: part === "tail" ? null : current.tailBox,
+    } : current);
+  }
+
+  function normalizedBoxColumns(box: CaptureBox | null) {
+    if (!box) return { x: "", y: "", width: "", height: "", source: "unknown" as const };
+    return {
+      x: box.x.toFixed(6),
+      y: box.y.toFixed(6),
+      width: box.width.toFixed(6),
+      height: box.height.toFixed(6),
+      source: "manual" as const,
+    };
+  }
+
+  function confirmPendingCapture() {
+    if (!pendingCapture) return;
+    let row: CaptureRow;
+    if (pendingCapture.kind === "stage") {
+      row = { ...pendingCapture.row, review_status: captureLabelsConfirmed ? "reviewed" : "needs_review" };
+    } else {
+      const head = normalizedBoxColumns(pendingCapture.headBox);
+      const tail = normalizedBoxColumns(pendingCapture.tailBox);
+      row = {
+        ...pendingCapture.row,
+        review_status: captureLabelsConfirmed ? "reviewed" : "needs_review",
+        head_status_source: captureLabelsConfirmed ? "manual" : pendingCapture.row.head_status_source,
+        tail_status_source: captureLabelsConfirmed ? "manual" : pendingCapture.row.tail_status_source,
+        head_bbox_x: head.x,
+        head_bbox_y: head.y,
+        head_bbox_width: head.width,
+        head_bbox_height: head.height,
+        head_bbox_source: head.source,
+        tail_bbox_x: tail.x,
+        tail_bbox_y: tail.y,
+        tail_bbox_width: tail.width,
+        tail_bbox_height: tail.height,
+        tail_bbox_source: tail.source,
+      };
+    }
+    downloadCaptureFile(pendingCapture.blob, row.frame_path);
+    setCaptureRows((rows) => [...rows, row]);
+    setCaptureManifestExported(false);
+    setCaptureLabelsConfirmed(false);
+    setCaptureMessage(pendingCapture.kind === "stage"
+      ? `${row.frame_path} を保存しました。工程を記録し、頭・尾など別の項目は不明のままにしました。`
+      : `${row.frame_path} を保存しました。枠は人の確認ラベルとしてCSVに記録しました。`);
+    URL.revokeObjectURL(pendingCapture.previewUrl);
+    setPendingCapture(null);
+  }
+
+  function exportCaptureManifest() {
+    if (captureRows.length === 0) return;
+    const csv = captureRowsToCsv(captureRows);
+    const safeSessionId = CAPTURE_ID_PATTERN.test(captureSessionId) ? captureSessionId : "fish-capture";
+    downloadCaptureFile(new Blob([csv], { type: "text/csv;charset=utf-8" }), `${safeSessionId}_capture-manifest.csv`);
+    setCaptureManifestExported(true);
+    setCaptureMessage("CSVを保存しました。画像とCSVを同じフォルダーに置いてください。");
+  }
+
+  function backToFishSelection() {
+    guideRequestController.current?.abort();
+    guideRequestController.current = null;
+    setGuideSessionLoading(false);
+    stopCamera();
+    setScreen("select");
+  }
+
+  async function advanceStep() {
+    if (!guideSession || !guide) return;
+    const nextIndex = Math.min(guide.steps.length - 1, activeStep + 1);
+    if (guideAdvanceInFlight.current) return;
+
+    if (guideSession?.status === "completed") {
+      if (nextIndex !== activeStep) {
+        setActiveStep(nextIndex);
+        setGuideMessage("");
+      }
+      return;
+    }
+
+    // The session API is authoritative. A locally selected earlier step can be
+    // revisited; moving back to the server's current step stays local, and only
+    // the next server step is submitted once the UI catches up.
+    if (activeStep < guideSession.currentStepIndex || activeStep > guideSession.currentStepIndex) {
+      if (nextIndex !== activeStep) setActiveStep(nextIndex);
+      return;
+    }
+
+    if (guideSessionMode === "local") {
+      const session = advanceLocalGuideSession(guideSession);
+      if (session.status === "completed") {
+        setGuideSession(session);
+        setActiveStep(session.currentStepIndex);
+        setGuideMessage("");
+        stopCamera();
+        return;
+      }
+      setGuideSession(session);
+      setActiveStep(Math.min(session.currentStepIndex, session.guide.steps.length - 1));
+      setGuideMessage("");
+      return;
+    }
+
+    if (!guideSession.currentStep) {
+      setActiveStep(nextIndex);
+      return;
+    }
+
+    const signal = guideRequestController.current?.signal;
+    if (!signal || signal.aborted) {
+      setGuideMessage("ガイドセッションが終了しました。魚を選び直して開始してください。");
+      return;
+    }
+
+    guideAdvanceInFlight.current = true;
+    setGuideAdvancing(true);
+    try {
+      const session = await advanceGuideSession(guideSession, signal);
+      if (signal.aborted) return;
+      if (session.status === "completed") {
+        setGuideSession(session);
+        setActiveStep(session.currentStepIndex);
+        setGuideMessage("");
+        stopCamera();
+        return;
+      }
+      setGuideSession(session);
+      setActiveStep(Math.min(session.currentStepIndex, session.guide.steps.length - 1));
+      setGuideMessage("");
+    } catch {
+      if (!signal.aborted) setGuideMessage("工程を更新できませんでした。現在の手順を確認して、もう一度お試しください。");
+    } finally {
+      guideAdvanceInFlight.current = false;
+      setGuideAdvancing(false);
+    }
+  }
+
+  async function analyzeCurrentCameraImage(expectedSignature: string): Promise<boolean> {
+    if (geminiAnalysis.loading || guideAdvancing || guideSessionLoading) return false;
+    if (!guideSession || !currentStep || !selectedGuideFishId || !videoRef.current || cameraStatus !== "active") return false;
+    if (!headTailDetection.faceDetectionReady) return false;
+
+    const signal = guideRequestController.current?.signal;
+    if (!signal || signal.aborted) return false;
+
+    const requestId = ++geminiAnalysisRequestId.current;
+    setGeminiAnalysis({ loading: true });
+    setGeminiFaceBlocked(false);
     try {
       const frame = await captureCurrentFrame(videoRef.current);
       if (signal.aborted || requestId !== geminiAnalysisRequestId.current
