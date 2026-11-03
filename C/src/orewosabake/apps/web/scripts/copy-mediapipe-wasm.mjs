@@ -10,6 +10,8 @@ const destinationDirectory = path.join(webDirectory, "public", "mediapipe", "was
 const runtimeFiles = [
   "vision_wasm_internal.js",
   "vision_wasm_internal.wasm",
+  "vision_wasm_module_internal.js",
+  "vision_wasm_module_internal.wasm",
   "vision_wasm_nosimd_internal.js",
   "vision_wasm_nosimd_internal.wasm",
 ];

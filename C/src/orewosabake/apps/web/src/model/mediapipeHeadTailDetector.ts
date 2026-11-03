@@ -82,7 +82,8 @@ export class MediaPipeFishInference {
     wasmPath = DEFAULT_MEDIAPIPE_WASM_PATH,
     fishStageModelPath?: string,
   ): Promise<MediaPipeFishInference> {
-    const wasmFiles = await FilesetResolver.forVisionTasks(wasmPath);
+    // Module workers need MediaPipe's ES module WASM loader.
+    const wasmFiles = await FilesetResolver.forVisionTasks(wasmPath, true);
     const detector = await ObjectDetector.createFromOptions(wasmFiles, {
       baseOptions: { modelAssetPath: modelPath },
       runningMode: "VIDEO",
