@@ -15,6 +15,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GENERATED_ROOT = PROJECT_ROOT / "ml" / "generated" / "fish-stage"
 STAGE_LABELS = {"whole", "head_removed", "gutted", "filleting", "finished"}
+REJECT_LABEL = "unknown"
+MODEL_LABELS = STAGE_LABELS | {REJECT_LABEL}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 TRANSITION_CONFIDENCE_THRESHOLD = 0.70
 TRANSITION_STABLE_FRAMES = 3
@@ -29,6 +31,49 @@ def image_files(data_root: Path, split: str) -> list[tuple[Path, str]]:
             if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
                 rows.append((path, label_dir.name))
     return rows
+
+
+def materialize_training_images(source_root: Path, destination_root: Path) -> dict[str, int]:
+    """Composite transparent training cutouts over varied backgrounds without touching holdout photos."""
+    from PIL import Image
+
+    background_colors = (
+        (243, 238, 228),  # warm prep surface
+        (48, 66, 63),     # dark neutral
+        (167, 183, 178),  # cool neutral
+        (139, 111, 82),   # wood-like neutral
+    )
+    report = {"transparent_training_cutouts": 0, "generated_background_variants": 0, "copied_opaque_training_images": 0}
+    for class_dir in sorted(path for path in source_root.iterdir() if path.is_dir()):
+        for path in sorted(class_dir.iterdir()):
+            if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
+                continue
+            target_class = destination_root / class_dir.name
+            target_class.mkdir(parents=True, exist_ok=True)
+            with Image.open(path) as source_image:
+                rgba = source_image.convert("RGBA")
+                alpha = rgba.getchannel("A")
+                transparency = alpha.getextrema()[0] < 255
+                if transparency:
+                    report["transparent_training_cutouts"] += 1
+                    for index, color in enumerate(background_colors, 1):
+                        composite = Image.new("RGB", rgba.size, color)
+                        composite.paste(rgba, (0, 0), alpha)
+                        output_path = target_class / f"{path.stem}_bg{index}.jpg"
+                        composite.save(output_path, format="JPEG", quality=92, optimize=True)
+                        report["generated_background_variants"] += 1
+                else:
+                    output_path = target_class / f"{path.stem}.jpg"
+                    rgba.convert("RGB").save(output_path, format="JPEG", quality=92, optimize=True)
+                    report["copied_opaque_training_images"] += 1
+    return report
+
+
+def contains_transparency(path: Path) -> bool:
+    from PIL import Image
+
+    with Image.open(path) as image:
+        return image.convert("RGBA").getchannel("A").getextrema()[0] < 255
 
 
 def counts_for(predictions: list[tuple[str, str]], labels: list[str]) -> dict[str, object]:
@@ -68,7 +113,7 @@ def paths_overlap(left: Path, right: Path) -> bool:
     return left == right or left in right.parents or right in left.parents
 
 
-def evaluate_video_transitions(mp: object, model_path: Path, data_root: Path) -> dict[str, object]:
+def evaluate_video_transitions(mp: object, model_path: Path, data_root: Path, model_labels: set[str]) -> dict[str, object]:
     samples_manifest = data_root / "stage-samples.csv"
     if not samples_manifest.is_file():
         return {
@@ -90,12 +135,19 @@ def evaluate_video_transitions(mp: object, model_path: Path, data_root: Path) ->
             session_id = row.get("session_id", "").strip()
             stage = row.get("stage", "").strip()
             image_path_value = row.get("image_path", "").strip()
+            capture_source = row.get("capture_source", "").strip() or "camera_sequence"
+            if capture_source == "static_image":
+                excluded_rows["static_image_not_a_sequence"] += 1
+                continue
+            if capture_source != "camera_sequence":
+                excluded_rows["invalid_capture_source"] += 1
+                continue
             try:
                 captured_at_ms = int(row.get("relative_time_ms", "").strip())
             except (TypeError, ValueError):
                 excluded_rows["missing_or_invalid_timestamp"] += 1
                 continue
-            if not fish_id or not session_id or stage not in STAGE_LABELS or captured_at_ms < 0 or not image_path_value:
+            if not fish_id or not session_id or stage not in MODEL_LABELS or captured_at_ms < 0 or not image_path_value:
                 excluded_rows["invalid_sequence_fields"] += 1
                 continue
             image_path = (data_root / image_path_value).resolve()
@@ -131,7 +183,7 @@ def evaluate_video_transitions(mp: object, model_path: Path, data_root: Path) ->
         classifier_options = mp.tasks.vision.ImageClassifierOptions(
             base_options=base_options,
             running_mode=mp.tasks.vision.RunningMode.VIDEO,
-            max_results=len(STAGE_LABELS),
+            max_results=len(model_labels),
         )
         classifier = mp.tasks.vision.ImageClassifier.create_from_options(classifier_options)
         previous_truth: str | None = None
@@ -149,6 +201,16 @@ def evaluate_video_transitions(mp: object, model_path: Path, data_root: Path) ->
                     candidate = None
                     candidate_count = 0
                     stable = None
+
+                if truth == REJECT_LABEL:
+                    # A reviewed non-stage frame breaks the known-stage sequence. It must
+                    # neither create a transition nor let a later frame bridge the gap.
+                    previous_truth = None
+                    previous_time = timestamp_ms
+                    candidate = None
+                    candidate_count = 0
+                    stable = None
+                    continue
 
                 if previous_truth is not None and previous_truth != truth:
                     truth_events.append({
@@ -266,6 +328,7 @@ def main() -> int:
         parser.error(f"prepared dataset not found: {data_root}")
 
     split_files = {split: image_files(data_root, split) for split in ("train", "validation", "test")}
+    labels_by_split = {split: {label for _, label in files} for split, files in split_files.items()}
     missing = {
         split: sorted(STAGE_LABELS - {label for _, label in files})
         for split, files in split_files.items()
@@ -273,15 +336,27 @@ def main() -> int:
     }
     if missing:
         details = "; ".join(f"{split}: {', '.join(labels)}" for split, labels in sorted(missing.items()))
-        parser.error(f"each split must contain reviewed images for all five states: {details}")
+        parser.error(f"each split must contain reviewed images for all five known states: {details}")
 
-    expected_labels = {label for _, label in split_files["train"]}
-    if expected_labels != STAGE_LABELS:
-        parser.error(f"training data must contain exactly these five states: {', '.join(sorted(STAGE_LABELS))}")
+    unsupported = {
+        split: sorted(labels - MODEL_LABELS)
+        for split, labels in labels_by_split.items()
+        if labels - MODEL_LABELS
+    }
+    if unsupported:
+        details = "; ".join(f"{split}: {', '.join(labels)}" for split, labels in sorted(unsupported.items()))
+        parser.error(f"dataset contains unsupported class folder(s): {details}")
 
-    mismatched = [split for split, files in split_files.items() if {label for _, label in files} != STAGE_LABELS]
+    expected_labels = labels_by_split["train"]
+    if not STAGE_LABELS.issubset(expected_labels):
+        parser.error(f"training data must contain the five known states: {', '.join(sorted(STAGE_LABELS))}")
+
+    mismatched = [split for split, labels in labels_by_split.items() if labels != expected_labels]
     if mismatched:
-        parser.error(f"train, validation, and test must use the same classes; mismatched split(s): {', '.join(mismatched)}")
+        parser.error(
+            "train, validation, and test must use the same classes; include reviewed unknown reject examples "
+            f"in every split when used. Mismatched split(s): {', '.join(mismatched)}"
+        )
 
     try:
         import mediapipe as mp
@@ -295,13 +370,30 @@ def main() -> int:
     if not tf.__version__.startswith("2"):
         parser.error(f"TensorFlow 2 is required, found {tf.__version__}")
 
+    try:
+        transparent_holdout = [
+            str(path)
+            for split in ("validation", "test")
+            for path, _label in split_files[split]
+            if contains_transparency(path)
+        ]
+    except ImportError as error:
+        parser.error(f"Pillow is required to safely prepare transparent cutouts: {error}")
+    if transparent_holdout:
+        parser.error(
+            "transparent cutouts are training-only; validation and test must use the preserved original photos. "
+            f"Found {len(transparent_holdout)} transparent holdout image(s)."
+        )
+
     if output_root.exists():
         if not args.force:
             parser.error(f"{output_root} already exists; pass --force to replace this generated model")
         shutil.rmtree(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
 
-    train_data = image_classifier.Dataset.from_folder(str(data_root / "train"))
+    training_input_root = output_root / "_training-inputs"
+    background_augmentation = materialize_training_images(data_root / "train", training_input_root)
+    train_data = image_classifier.Dataset.from_folder(str(training_input_root))
     validation_data = image_classifier.Dataset.from_folder(str(data_root / "validation"))
     test_data = image_classifier.Dataset.from_folder(str(data_root / "test"))
     if set(train_data.label_names) != expected_labels or set(validation_data.label_names) != expected_labels or set(test_data.label_names) != expected_labels:
@@ -320,6 +412,7 @@ def main() -> int:
         validation_data=validation_data,
         options=options,
     )
+    shutil.rmtree(training_input_root)
     test_loss, test_accuracy = model.evaluate(test_data)
     model.export_model()
 
@@ -334,6 +427,7 @@ def main() -> int:
     classifier_options = mp.tasks.vision.ImageClassifierOptions(
         base_options=base_options,
         running_mode=mp.tasks.vision.RunningMode.IMAGE,
+        max_results=len(expected_labels),
     )
     classifier = mp.tasks.vision.ImageClassifier.create_from_options(classifier_options)
     predictions: list[tuple[str, str]] = []
@@ -347,7 +441,7 @@ def main() -> int:
     finally:
         classifier.close()
 
-    transition_evaluation = evaluate_video_transitions(mp, model_path, data_root)
+    transition_evaluation = evaluate_video_transitions(mp, model_path, data_root, expected_labels)
 
     report = {
         "fish_id": args.fish_id,
@@ -357,7 +451,15 @@ def main() -> int:
         "model": model_path.name,
         "model_bytes": model_path.stat().st_size,
         "labels": sorted(expected_labels),
+        "reject_class": {
+            "label": REJECT_LABEL if REJECT_LABEL in expected_labels else None,
+            "meaning": "reviewed confirmed_stage=other capture examples only; not a universal unknown detector",
+        },
         "image_counts": {split: len(files) for split, files in split_files.items()},
+        "training_background_augmentation": {
+            **background_augmentation,
+            "policy": "Each transparent training cutout is composited over four fixed neutral backgrounds; the original opaque photograph is retained in the same fish/session split. Validation and test use opaque source photographs only.",
+        },
         "model_maker_test": {"loss": float(test_loss), "accuracy": float(test_accuracy)},
         "mediapipe_tflite_test": counts_for(predictions, sorted(expected_labels)),
         "transition_evaluation": transition_evaluation,

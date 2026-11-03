@@ -7,6 +7,7 @@ import csv
 import hashlib
 import json
 import shutil
+import struct
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -22,6 +23,10 @@ FISH_NAMES = {
     "tai": {"タイ", "たい", "鯛"},
 }
 STAGE_LABELS = {"whole", "head_removed", "gutted", "filleting", "finished"}
+REJECT_LABEL = "unknown"
+OTHER_STAGE_VALUES = {"other", "その他", "判定対象外", "判定対象外（工程外）", "判定対象外（工程外の画像）"}
+UNKNOWN_STAGE_VALUES = {"unknown", "不明", "未確認", "未確認（不明）", "不明・未確認（学習対象外）"}
+MODEL_LABELS = STAGE_LABELS | {REJECT_LABEL}
 STAGE_ALIASES = {"未処理": "whole", "頭を外した": "head_removed", "内臓処理済み": "gutted"}
 
 
@@ -111,10 +116,24 @@ def paths_overlap(left: Path, right: Path) -> bool:
     return left == right or left in right.parents or right in left.parents
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def is_rgba_png(path: Path) -> bool:
+    with path.open("rb") as handle:
+        header = handle.read(26)
+    return len(header) >= 26 and header[:8] == b"\x89PNG\r\n\x1a\n" and struct.unpack(">I", header[8:12])[0] == 13 and header[25] == 6
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True, help="capture-manifest.csv exported by the app")
-    parser.add_argument("--images-dir", type=Path, required=True, help="folder containing the captured JPEG files")
+    parser.add_argument("--images-dir", type=Path, required=True, help="folder containing the captured JPEG, PNG, and WebP files")
     parser.add_argument("--fish-id", choices=sorted(FISH_NAMES), required=True, help="one guide species; models do not transfer between fish")
     parser.add_argument("--output", type=Path, default=None, help="generated dataset folder (defaults under ml/generated/fish-stage)")
     parser.add_argument("--write-split-template", action="store_true", help="write a fish/session grouped split template and stop")
@@ -170,15 +189,24 @@ def main() -> int:
     if set(split_map.values()) != SPLITS:
         parser.error("split map must include independent groups for train, validation, and test")
 
-    eligible: list[tuple[str, str, Path, str, str, int]] = []
+    eligible: list[tuple[str, str, Path, str, str, int, str, Path | None, bool]] = []
     excluded: Counter[str] = Counter()
-    seen: set[Path] = set()
+    seen: dict[Path, tuple[int, str]] = {}
+    seen_image_hashes: dict[str, tuple[int, str]] = {}
     for row_number, row in enumerate(rows, 2):
+        if row.get("image_class", "fish").strip().lower() == "non_fish":
+            excluded["non_fish_image"] += 1
+            continue
         if row.get("review_status", "").strip() != "reviewed":
             excluded["stage_label_not_reviewed"] += 1
             continue
-        stage = STAGE_ALIASES.get(row.get("confirmed_stage", "").strip(), row.get("confirmed_stage", "").strip())
-        if stage not in STAGE_LABELS:
+        raw_stage = row.get("confirmed_stage", "").strip()
+        normalized_stage = raw_stage.casefold()
+        if normalized_stage in UNKNOWN_STAGE_VALUES:
+            excluded["stage_label_unknown"] += 1
+            continue
+        stage = REJECT_LABEL if normalized_stage in OTHER_STAGE_VALUES else STAGE_ALIASES.get(raw_stage, normalized_stage)
+        if stage not in MODEL_LABELS:
             excluded["unknown_or_unsupported_stage"] += 1
             continue
         try:
@@ -188,6 +216,14 @@ def main() -> int:
             continue
         if relative_time_ms < 0:
             excluded["missing_or_invalid_timestamp"] += 1
+            continue
+        capture_source = row.get("capture_source", "").strip() or "camera_sequence"
+        if capture_source not in {"camera_sequence", "static_image"}:
+            excluded["invalid_capture_source"] += 1
+            continue
+        background_mask = row.get("background_mask", "").strip() or "none"
+        if background_mask not in {"none", "mediapipe_magic_touch_v1"}:
+            excluded["invalid_background_mask"] += 1
             continue
         raw_path = row.get("frame_path", "").strip()
         if not raw_path:
@@ -199,13 +235,49 @@ def main() -> int:
         except ValueError:
             excluded["path_outside_images_dir"] += 1
             continue
-        if image_path in seen:
+        previous_path = seen.get(image_path)
+        if previous_path is not None:
+            previous_row, previous_stage = previous_path
+            if previous_stage != stage:
+                parser.error(
+                    f"manifest rows {previous_row} and {row_number} reference the same image with conflicting labels "
+                    f"({previous_stage} vs {stage})"
+                )
             excluded["duplicate_frame_path"] += 1
             continue
-        seen.add(image_path)
+        seen[image_path] = (row_number, stage)
         if not image_path.is_file():
             excluded["missing_image_file"] += 1
             continue
+        source_image_path: Path | None = None
+        raw_source_path = row.get("source_frame_path", "").strip()
+        if raw_source_path:
+            source_image_path = (images_root / raw_source_path).resolve()
+            try:
+                source_image_path.relative_to(images_root)
+            except ValueError:
+                excluded["source_path_outside_images_dir"] += 1
+                continue
+            if not source_image_path.is_file():
+                excluded["missing_source_image_file"] += 1
+                continue
+        if background_mask == "mediapipe_magic_touch_v1":
+            if not source_image_path or image_path.suffix.lower() != ".png" or not is_rgba_png(image_path):
+                parser.error(
+                    f"CSV row {row_number}: MediaPipe transparent samples require an RGBA PNG frame_path and a valid source_frame_path"
+                )
+        image_hash = sha256_file(image_path)
+        previous_image = seen_image_hashes.get(image_hash)
+        if previous_image is not None:
+            previous_row, previous_stage = previous_image
+            if previous_stage != stage:
+                parser.error(
+                    f"manifest rows {previous_row} and {row_number} use identical image bytes with conflicting labels "
+                    f"({previous_stage} vs {stage})"
+                )
+            excluded["duplicate_image_content"] += 1
+            continue
+        seen_image_hashes[image_hash] = (row_number, stage)
         eligible.append((
             split_map[row_groups[row_number - 2]],
             stage,
@@ -213,6 +285,9 @@ def main() -> int:
             row["fish_id"].strip(),
             row["session_id"].strip(),
             relative_time_ms,
+            capture_source,
+            source_image_path,
+            background_mask == "mediapipe_magic_touch_v1",
         ))
 
     counts: dict[str, Counter[str]] = {split: Counter() for split in SPLITS}
@@ -227,35 +302,78 @@ def main() -> int:
         detail = "; ".join(f"{split} missing {', '.join(labels)}" for split, labels in sorted(missing.items()))
         parser.error(f"each split needs reviewed examples for all five states before training: {detail}")
 
+    if any(counts[split][REJECT_LABEL] for split in SPLITS):
+        missing_reject = sorted(split for split in SPLITS if not counts[split][REJECT_LABEL])
+        if missing_reject:
+            parser.error(
+                "reviewed 判定対象外 (other) images create an unknown reject class; "
+                f"add independent examples to every split (missing: {', '.join(missing_reject)})"
+            )
+
     if output_root.exists():
         if not args.force:
             parser.error(f"{output_root} already exists; pass --force to replace this generated dataset")
         shutil.rmtree(output_root)
 
     sample_rows: list[dict[str, str]] = []
-    for number, (split, stage, image_path, fish_id, session_id, relative_time_ms) in enumerate(eligible, 1):
-        destination = output_root / split / stage / f"{number:06d}_{image_path.name}"
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(image_path, destination)
+    mask_counts: Counter[str] = Counter()
+    for number, (split, stage, image_path, fish_id, session_id, relative_time_ms, capture_source, source_image_path, is_masked) in enumerate(eligible, 1):
+        split_class_dir = output_root / split / stage
+        split_class_dir.mkdir(parents=True, exist_ok=True)
+        mask_destination: Path | None = None
+        if is_masked:
+            mask_destination = output_root / "background-mask-sources" / split / stage / f"{number:06d}_{image_path.name}"
+            mask_destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(image_path, mask_destination)
+            assert source_image_path is not None
+            source_destination = output_root / "background-mask-sources" / split / stage / f"{number:06d}_{source_image_path.name}"
+            shutil.copy2(source_image_path, source_destination)
+            mask_counts[split] += 1
+
+            if split == "train":
+                destination = split_class_dir / f"{number:06d}_{image_path.name}"
+                shutil.copy2(image_path, destination)
+                # Keep the real camera background as a training example as well as the cutout.
+                train_source_destination = split_class_dir / f"{number:06d}_{source_image_path.name}"
+                shutil.copy2(source_image_path, train_source_destination)
+            else:
+                # Validation and test must use the unmodified photograph, never its transparent cutout.
+                destination = split_class_dir / f"{number:06d}_{source_image_path.name}"
+                shutil.copy2(source_image_path, destination)
+        else:
+            destination = split_class_dir / f"{number:06d}_{image_path.name}"
+            shutil.copy2(image_path, destination)
         sample_rows.append({
             "split": split,
             "fish_id": fish_id,
             "session_id": session_id,
             "relative_time_ms": str(relative_time_ms),
+            "capture_source": capture_source,
             "stage": stage,
             "image_path": destination.relative_to(output_root).as_posix(),
+            "source_frame_path": source_image_path.relative_to(images_root).as_posix() if source_image_path else "",
+            "background_mask": "mediapipe_magic_touch_v1" if is_masked else "none",
+            "mask_source_image_path": mask_destination.relative_to(output_root).as_posix() if mask_destination else "",
         })
 
     with (output_root / "stage-samples.csv").open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["split", "fish_id", "session_id", "relative_time_ms", "stage", "image_path"])
+        writer = csv.DictWriter(handle, fieldnames=["split", "fish_id", "session_id", "relative_time_ms", "capture_source", "stage", "image_path", "source_frame_path", "background_mask", "mask_source_image_path"])
         writer.writeheader()
         writer.writerows(sample_rows)
 
     summary = {
         "fish_id": args.fish_id,
-        "labels": sorted(STAGE_LABELS),
+        "labels": sorted({label for split in counts.values() for label in split}),
+        "reject_class": {
+            "label": REJECT_LABEL,
+            "source": "reviewed confirmed_stage=other only",
+            "warning": "This class learns only from the collected examples; it does not guarantee rejection of every unfamiliar image.",
+        },
         "split_method": "connected_groups_of_shared_fish_id_or_session_id",
         "independent_group_count": len(groups),
+        "capture_sources": dict(sorted(Counter(item[6] for item in eligible).items())),
+        "background_masked_samples_by_split": dict(sorted(mask_counts.items())),
+        "masked_image_policy": "Training includes each original plus a transparent cutout; validation and test use only the preserved opaque source photograph. All variants remain in the same fish/session split.",
         "excluded_rows": dict(sorted(excluded.items())),
         "splits": {split: {"images": sum(counts[split].values()), "class_counts": dict(sorted(counts[split].items()))} for split in sorted(SPLITS)},
         "target_per_class": "Google recommends approximately 100 examples per class as an experiment starting point; this is not an accuracy guarantee.",
