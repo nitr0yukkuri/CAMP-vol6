@@ -1152,8 +1152,13 @@ function App() {
       if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return false;
       setGeminiAnalysis({ loading: false, result });
       return true;
-    } catch {
-      if (!signal.aborted && requestId === geminiAnalysisRequestId.current) setGeminiAnalysis({ loading: false, error: true });
+    } catch (error) {
+      if (requestId !== geminiAnalysisRequestId.current) return false;
+      if (error instanceof Error && error.name === "AbortError") {
+        setGeminiAnalysis({ loading: false });
+        return false;
+      }
+      if (!signal.aborted) setGeminiAnalysis({ loading: false, error: true });
       return false;
     }
   }
