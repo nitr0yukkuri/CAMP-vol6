@@ -8,8 +8,16 @@ const counts = new Map();
 const successfulResult = {
   certainty: "uncertain",
   visibleParts: [],
+  fishStateAssessment: { state: "unknown", evidence: "合成テスト画像だけでは魚体の状態を区別できません。" },
   stepAssessment: { status: "uncertain", evidence: "合成テスト画像だけでは判断できません。" },
   evidence: "合成テスト画像だけでは魚の状態を確認できません。",
+  caution: "この応答はローカルの偽APIです。",
+};
+const nonSalmonResult = {
+  certainty: "uncertain",
+  visibleParts: [],
+  stepAssessment: { status: "uncertain", evidence: "現在画像だけでは判断できません。" },
+  evidence: "現在画像だけでは魚の状態を確認できません。",
   caution: "この応答はローカルの偽APIです。",
 };
 
@@ -70,12 +78,23 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 400, errorBody("INVALID_ARGUMENT", "Invalid JSON"));
   }
   const parts = body.contents?.[0]?.parts;
-  const hasImage = Array.isArray(parts)
-    && parts.some((part) => part?.inlineData?.mimeType === "image/jpeg" && typeof part.inlineData.data === "string" && part.inlineData.data.length > 0);
+  const inlineImages = Array.isArray(parts)
+    ? parts.filter((part) => part?.inlineData?.mimeType === "image/jpeg" && typeof part.inlineData.data === "string" && part.inlineData.data.length > 0)
+    : [];
   const hasPrompt = Array.isArray(parts) && parts.some((part) => typeof part?.text === "string");
+  const promptText = Array.isArray(parts)
+    ? parts.filter((part) => typeof part?.text === "string").map((part) => part.text).join("\n")
+    : "";
+  const expectsFishState = promptText.includes("魚種ID: salmon");
+  const hasFishStateSchema = Boolean(body.generationConfig?.responseSchema?.properties?.fishStateAssessment?.properties?.state);
   const hasGuideResponseSchema = body.generationConfig?.responseMimeType === "application/json"
     && body.generationConfig?.responseSchema?.properties?.stepAssessment?.properties?.status;
-  if (decodeURIComponent(modelMatch[1]) !== expectedModel || !hasImage || !hasPrompt || !hasGuideResponseSchema) {
+  const expectedImageCount = expectsFishState ? 2 : 1;
+  if (decodeURIComponent(modelMatch[1]) !== expectedModel
+    || inlineImages.length !== expectedImageCount
+    || hasFishStateSchema !== expectsFishState
+    || !hasPrompt
+    || !hasGuideResponseSchema) {
     return sendJson(response, 400, errorBody("INVALID_ARGUMENT", "Unexpected GenerateContent request"));
   }
 
@@ -105,7 +124,7 @@ const server = createServer(async (request, response) => {
   if (scenario === "timeout") await new Promise((resolve) => setTimeout(resolve, 1_500));
   if (scenario === "invalid_output") return sendJson(response, 200, { candidates: [{ content: { parts: [{ text: "not JSON" }] } }] });
   if (response.destroyed) return;
-  return sendJson(response, 200, generatedContent());
+  return sendJson(response, 200, generatedContent(scenario === "non_salmon_success" ? nonSalmonResult : successfulResult));
 });
 
 server.listen(port, host, () => {

@@ -75,6 +75,28 @@ type GeminiAutoDetectionWatch = {
   retryAtMs: number;
 };
 
+type GeminiAnalysisContext = {
+  sessionId: string;
+  stepId: string;
+  stream: MediaStream;
+  signature: string;
+  requestId: number;
+};
+
+type GeminiStepBaseline = {
+  sessionId: string;
+  stepId: string;
+  stream: MediaStream;
+  imageData: string;
+};
+
+type GeminiAutoAdvanceCandidate = {
+  sessionId: string;
+  stepId: string;
+  signature: string;
+  count: number;
+};
+
 function createGeminiAutoDetectionWatch(): GeminiAutoDetectionWatch {
   return {
     lastObservationAt: null,
@@ -140,6 +162,24 @@ const GEMINI_AUTO_MAX_FRAME_GAP_MS = 2_500;
 const GEMINI_AUTO_MAX_OBSERVATION_AGE_MS = 2_000;
 const GEMINI_AUTO_MIN_INTERVAL_MS = 10_000;
 const GEMINI_AUTO_RETRY_DELAYS_MS = [15_000, 30_000, 60_000] as const;
+const GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS = 3;
+const SALMON_AUTO_ADVANCE_STEP_IDS = new Set([
+  "salmon_guts",
+  "salmon_head",
+  "salmon_first_side",
+  "salmon_second_side",
+]);
+
+function fishStateLabel(state: NonNullable<GuideImageAnalysisResponse["fishStateAssessment"]>["state"]): string {
+  switch (state) {
+    case "whole_fish": return "丸のまま";
+    case "opened": return "腹を開いた状態";
+    case "head_removed": return "頭を外した状態";
+    case "filleting": return "片身を外している状態";
+    case "filleted": return "両身を外した状態";
+    case "unknown": return "判別できない状態";
+  }
+}
 
 function createCaptureSessionId(): string {
   const now = new Date();
@@ -218,7 +258,7 @@ async function createGuideSession(requestBody: GuideRequest, signal: AbortSignal
 }
 
 async function analyzeGuideImage(
-  requestBody: { fishId: GuideRequest["fishId"]; stepId: string; imageData: string },
+  requestBody: { fishId: GuideRequest["fishId"]; stepId: string; baselineImageData?: string; imageData: string },
   signal: AbortSignal,
 ): Promise<GuideImageAnalysisResponse> {
   const response = await fetch("/api/guide/analyze", {
@@ -281,14 +321,14 @@ function advanceLocalGuideSession(session: GuideSession): GuideSession {
   });
 }
 
-async function advanceGuideSession(session: GuideSession, signal: AbortSignal): Promise<GuideSession> {
+async function advanceGuideSession(session: GuideSession, signal: AbortSignal, source: "button" | "vision"): Promise<GuideSession> {
   const currentStep = session.currentStep;
   if (!currentStep) throw new Error("There is no active guide step");
 
   const response = await fetch(`/api/guide/sessions/${session.sessionId}/advance`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(AdvanceGuideStepRequestSchema.parse({ stepId: currentStep.id, source: "button" })),
+    body: JSON.stringify(AdvanceGuideStepRequestSchema.parse({ stepId: currentStep.id, source })),
     signal,
   });
   if (!response.ok) throw new Error("Guide session could not advance");
@@ -427,7 +467,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
           </li>
         </ol>
 
-        <p className="help-privacy-note">ガイド中の映像はMediaPipeで端末内処理します。頭・尾の検知が3回続けて安定した後、送信前に人物チェックを行い、顔を検知した場合や人物チェックを利用できない場合はGeminiへ送りません。顔の見逃しを完全に防ぐものではありません。チェックを通過した場合、圧縮静止画1枚をGoogle Geminiへ自動送信します。連続動画は送らず、画像はアプリに保存しません。Geminiは工程完了や安全性を保証せず、次の工程へ自動で進むこともありません。</p>
+        <p className="help-privacy-note">ガイド中の映像はMediaPipeで端末内処理します。頭・尾の検知が3回続けて安定した後、送信前に人物チェックを行い、顔を検知した場合や人物チェックを利用できない場合はGeminiへ送りません。顔の見逃しを完全に防ぐものではありません。チェックを通過したサーモンの画像は工程開始時と現在の圧縮静止画をGoogle Geminiへ自動送信します。連続動画は送らず、画像はアプリに保存しません。サーモンは見た目で確認できる一部の工程だけ、Geminiの判定が3回続けて一致すると自動で次へ進みます。うろこと小骨の確認は自動判定せず、画面の「次の工程へ」を押します。試作機能のため、魚と手元を確認してください。</p>
         <footer className="help-dialog-footer">
           <button type="button" onClick={() => dialogRef.current?.close()}>OK</button>
         </footer>
@@ -450,10 +490,13 @@ function App() {
     loading: boolean;
     result?: GuideImageAnalysisResponse;
     error?: boolean;
+    context?: GeminiAnalysisContext;
   }>({ loading: false });
   const [geminiFaceBlocked, setGeminiFaceBlocked] = useState(false);
   const [geminiAutoPending, setGeminiAutoPending] = useState(false);
   const [geminiAutoCooldownTick, setGeminiAutoCooldownTick] = useState(0);
+  const [geminiBaselineReady, setGeminiBaselineReady] = useState(false);
+  const [geminiAutoAdvanceCount, setGeminiAutoAdvanceCount] = useState(0);
   const [pageVisible, setPageVisible] = useState(true);
   const [guideAdvancing, setGuideAdvancing] = useState(false);
   const [activeStep, setActiveStepState] = useState(0);
@@ -489,6 +532,9 @@ function App() {
   const geminiAnalysisRequestId = useRef(0);
   const geminiAutoAnalyzerRef = useRef<((expectedSignature: string) => Promise<boolean>) | null>(null);
   const geminiAutoDetectionWatch = useRef<GeminiAutoDetectionWatch>(createGeminiAutoDetectionWatch());
+  const geminiStepBaseline = useRef<GeminiStepBaseline | null>(null);
+  const geminiAutoAdvanceCandidate = useRef<GeminiAutoAdvanceCandidate | null>(null);
+  const lastGeminiAutoAdvanceResultId = useRef(0);
   const detectionFishName = selectedFish === "その他" ? search.trim() || "ほかの魚" : selectedFish;
   const detectionFishId = screen === "guide" ? resolveGuideFishId(detectionFishName) ?? null : null;
   const headTailDetection = useHeadTailDetection(
@@ -614,7 +660,21 @@ function App() {
     geminiAnalysisRequestId.current += 1;
     setGeminiAnalysis({ loading: false });
     setGeminiFaceBlocked(false);
+    geminiStepBaseline.current = null;
+    setGeminiBaselineReady(false);
+    geminiAutoAdvanceCandidate.current = null;
+    setGeminiAutoAdvanceCount(0);
+    lastGeminiAutoAdvanceResultId.current = 0;
   }, [currentStep?.id]);
+
+  useEffect(() => {
+    geminiAnalysisRequestId.current += 1;
+    geminiStepBaseline.current = null;
+    setGeminiBaselineReady(false);
+    geminiAutoAdvanceCandidate.current = null;
+    setGeminiAutoAdvanceCount(0);
+    lastGeminiAutoAdvanceResultId.current = 0;
+  }, [cameraStream, guideSession?.sessionId]);
 
   useEffect(() => {
     const previousWatch = geminiAutoDetectionWatch.current;
@@ -640,6 +700,10 @@ function App() {
     setGuideMessage("");
     setGeminiAnalysis({ loading: false });
     setGeminiFaceBlocked(false);
+    geminiStepBaseline.current = null;
+    setGeminiBaselineReady(false);
+    geminiAutoAdvanceCandidate.current = null;
+    setGeminiAutoAdvanceCount(0);
     setCameraMessage("");
 
     guideRequestController.current?.abort();
@@ -1051,10 +1115,44 @@ function App() {
     setScreen("select");
   }
 
-  async function advanceStep() {
+  async function advanceStep(source: "button" | "vision" = "button") {
     if (!guideSession || !guide) return;
     const nextIndex = Math.min(guide.steps.length - 1, activeStep + 1);
     if (guideAdvanceInFlight.current) return;
+
+    if (source === "vision") {
+      const candidate = geminiAutoAdvanceCandidate.current;
+      const observation = latestObservationRef.current;
+      const analysisContext = geminiAnalysis.context;
+      const liveSignature = geminiObservationSignature(currentStep?.id ?? "", observation);
+      if (!candidate
+        || !analysisContext
+        || selectedGuideFishId !== "salmon"
+        || !currentStep
+        || !SALMON_AUTO_ADVANCE_STEP_IDS.has(currentStep.id)
+        || activeStep !== guideSession.currentStepIndex
+        || guideSession.currentStep?.id !== currentStep.id
+        || guideSessionMode !== "worker"
+        || screen !== "guide"
+        || !pageVisible
+        || cameraStatus !== "active"
+        || !cameraStream
+        || analysisContext?.sessionId !== guideSession.sessionId
+        || analysisContext.stepId !== currentStep.id
+        || analysisContext.stream !== cameraStream
+        || analysisContext.signature !== candidate.signature
+        || !headTailDetection.faceDetectionReady
+        || !hasFreshHeadTailObservation(observation)
+        || liveSignature !== candidate.signature
+        || candidate.sessionId !== guideSession.sessionId
+        || candidate.stepId !== currentStep.id
+        || candidate.count < GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS
+        || geminiAnalysis.result?.certainty !== "observed"
+        || geminiAnalysis.result.fishStateAssessment?.state !== currentStep.expectedState
+        || geminiAnalysis.result.stepAssessment.status !== "likely_complete") return;
+      geminiAutoAdvanceCandidate.current = null;
+      setGeminiAutoAdvanceCount(0);
+    }
 
     if (guideSession?.status === "completed") {
       if (nextIndex !== activeStep) {
@@ -1101,7 +1199,7 @@ function App() {
     guideAdvanceInFlight.current = true;
     setGuideAdvancing(true);
     try {
-      const session = await advanceGuideSession(guideSession, signal);
+      const session = await advanceGuideSession(guideSession, signal, source);
       if (signal.aborted) return;
       if (session.status === "completed") {
         setGuideSession(session);
@@ -1123,38 +1221,76 @@ function App() {
 
   async function analyzeCurrentCameraImage(expectedSignature: string): Promise<boolean> {
     if (geminiAnalysis.loading || guideAdvancing || guideSessionLoading) return false;
-    if (!guideSession || !currentStep || !selectedGuideFishId || !videoRef.current || cameraStatus !== "active") return false;
+    if (!guideSession || !currentStep || !selectedGuideFishId || !videoRef.current || !cameraStream || cameraStatus !== "active") return false;
     if (!hasFreshHeadTailObservation(headTailDetection.observation)) return false;
     if (!headTailDetection.faceDetectionReady) return false;
 
+    const sessionId = guideSession.sessionId;
+    const stepId = currentStep.id;
+    const stream = cameraStream;
     const signal = guideRequestController.current?.signal;
     if (!signal || signal.aborted) return false;
 
     const requestId = ++geminiAnalysisRequestId.current;
     setGeminiAnalysis({ loading: true });
     setGeminiFaceBlocked(false);
+    const discardStaleAnalysis = () => {
+      if (requestId === geminiAnalysisRequestId.current) setGeminiAnalysis({ loading: false });
+      return false;
+    };
     try {
       const frame = await captureCurrentFrame(videoRef.current);
-      if (signal.aborted || requestId !== geminiAnalysisRequestId.current
-        || geminiObservationSignature(currentStep.id, latestObservationRef.current) !== expectedSignature) return false;
+      if (signal.aborted || requestId !== geminiAnalysisRequestId.current || cameraStream !== stream
+        || guideSession?.sessionId !== sessionId || currentStep?.id !== stepId
+        || geminiObservationSignature(stepId, latestObservationRef.current) !== expectedSignature) return discardStaleAnalysis();
       const faceDetected = await headTailDetection.checkFrameForFace(await createImageBitmap(frame.blob));
-      if (signal.aborted || requestId !== geminiAnalysisRequestId.current
-        || geminiObservationSignature(currentStep.id, latestObservationRef.current) !== expectedSignature) return false;
+      if (signal.aborted || requestId !== geminiAnalysisRequestId.current || cameraStream !== stream
+        || guideSession?.sessionId !== sessionId || currentStep?.id !== stepId
+        || geminiObservationSignature(stepId, latestObservationRef.current) !== expectedSignature) return discardStaleAnalysis();
       if (faceDetected) {
         setGeminiAnalysis({ loading: false });
         setGeminiFaceBlocked(true);
+        geminiAutoAdvanceCandidate.current = null;
+        setGeminiAutoAdvanceCount(0);
         return true;
       }
       const imageData = await blobToDataUrl(frame.blob);
-      if (signal.aborted || requestId !== geminiAnalysisRequestId.current
-        || geminiObservationSignature(currentStep.id, latestObservationRef.current) !== expectedSignature) return false;
+      if (signal.aborted || requestId !== geminiAnalysisRequestId.current || cameraStream !== stream
+        || guideSession?.sessionId !== sessionId || currentStep?.id !== stepId
+        || geminiObservationSignature(stepId, latestObservationRef.current) !== expectedSignature) return discardStaleAnalysis();
+
+      const isSalmon = selectedGuideFishId === "salmon";
+      const baseline = isSalmon ? geminiStepBaseline.current : null;
+      const baselineMatchesStep = baseline?.sessionId === sessionId
+        && baseline.stepId === stepId
+        && baseline.stream === stream;
+      if (isSalmon && !baselineMatchesStep) {
+        geminiStepBaseline.current = { sessionId, stepId, stream, imageData };
+        setGeminiBaselineReady(true);
+        setGeminiAnalysis({ loading: false });
+        geminiAutoAdvanceCandidate.current = null;
+        setGeminiAutoAdvanceCount(0);
+        return true;
+      }
+
+      const context: GeminiAnalysisContext = { sessionId, stepId, stream, signature: expectedSignature, requestId };
+      setGeminiAnalysis({ loading: true, context });
       geminiAutoDetectionWatch.current.lastTriggeredAt = Date.now();
-      const result = await analyzeGuideImage({ fishId: selectedGuideFishId, stepId: currentStep.id, imageData }, signal);
-      if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return false;
-      setGeminiAnalysis({ loading: false, result });
+      const result = await analyzeGuideImage({
+        fishId: selectedGuideFishId,
+        stepId,
+        ...(baselineMatchesStep && baseline ? { baselineImageData: baseline.imageData } : {}),
+        imageData,
+      }, signal);
+      if (signal.aborted || requestId !== geminiAnalysisRequestId.current || cameraStream !== stream
+        || guideSession?.sessionId !== sessionId || currentStep?.id !== stepId
+        || geminiObservationSignature(stepId, latestObservationRef.current) !== expectedSignature) return discardStaleAnalysis();
+      setGeminiAnalysis({ loading: false, result, context });
       return true;
     } catch (error) {
       if (requestId !== geminiAnalysisRequestId.current) return false;
+      geminiAutoAdvanceCandidate.current = null;
+      setGeminiAutoAdvanceCount(0);
       if (error instanceof Error && error.name === "AbortError") {
         setGeminiAnalysis({ loading: false });
         return false;
@@ -1360,6 +1496,121 @@ function App() {
     headTailDetection.observation,
   ]);
 
+  useEffect(() => {
+    const result = geminiAnalysis.result;
+    const context = geminiAnalysis.context;
+    if (!result || geminiAnalysis.loading || !context || context.requestId === lastGeminiAutoAdvanceResultId.current) return;
+    lastGeminiAutoAdvanceResultId.current = context.requestId;
+
+    const observation = latestObservationRef.current;
+    const liveSignature = geminiObservationSignature(currentStep?.id ?? "", observation);
+    const baseline = geminiStepBaseline.current;
+    const canCountConfirmation = selectedGuideFishId === "salmon"
+      && currentStep !== undefined
+      && SALMON_AUTO_ADVANCE_STEP_IDS.has(currentStep.id)
+      && activeStep === guideSession?.currentStepIndex
+      && guideSession?.currentStep?.id === currentStep.id
+      && guideSessionMode === "worker"
+      && screen === "guide"
+      && pageVisible
+      && cameraStatus === "active"
+      && cameraStream !== null
+      && context.sessionId === guideSession.sessionId
+      && context.stepId === currentStep.id
+      && context.stream === cameraStream
+      && context.signature === liveSignature
+      && geminiAutoDetectionWatch.current.stableSignature === context.signature
+      && baseline?.sessionId === context.sessionId
+      && baseline.stepId === context.stepId
+      && baseline.stream === context.stream
+      && headTailDetection.status === "active"
+      && headTailDetection.faceDetectionReady
+      && hasFreshHeadTailObservation(observation)
+      && result.certainty === "observed"
+      && result.fishStateAssessment?.state === currentStep.expectedState
+      && result.stepAssessment.status === "likely_complete";
+
+    if (!canCountConfirmation || !currentStep || !guideSession) {
+      geminiAutoAdvanceCandidate.current = null;
+      setGeminiAutoAdvanceCount(0);
+      return;
+    }
+
+    const previous = geminiAutoAdvanceCandidate.current;
+    const sameCandidate = previous?.sessionId === context.sessionId
+      && previous.stepId === context.stepId
+      && previous.signature === context.signature;
+    const count = sameCandidate ? previous.count + 1 : 1;
+    geminiAutoAdvanceCandidate.current = {
+      sessionId: context.sessionId,
+      stepId: context.stepId,
+      signature: context.signature,
+      count,
+    };
+    setGeminiAutoAdvanceCount(count);
+
+    if (count >= GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS) {
+      void advanceStep("vision");
+    }
+  }, [
+    geminiAnalysis.loading,
+    geminiAnalysis.result,
+    geminiAnalysis.context?.requestId,
+    currentStep?.id,
+    currentStep?.expectedState,
+    activeStep,
+    guideSession?.sessionId,
+    guideSession?.currentStepIndex,
+    guideSession?.currentStep?.id,
+    guideSessionMode,
+    screen,
+    pageVisible,
+    cameraStatus,
+    cameraStream,
+    headTailDetection.status,
+    headTailDetection.faceDetectionReady,
+    headTailDetection.observation,
+    selectedGuideFishId,
+  ]);
+
+  useEffect(() => {
+    const candidate = geminiAutoAdvanceCandidate.current;
+    if (!candidate) return;
+    const observation = latestObservationRef.current;
+    const signature = geminiObservationSignature(currentStep?.id ?? "", observation);
+    const stillEligible = pageVisible
+      && screen === "guide"
+      && cameraStatus === "active"
+      && cameraStream !== null
+      && guideSession?.sessionId === candidate.sessionId
+      && currentStep?.id === candidate.stepId
+      && activeStep === guideSession.currentStepIndex
+      && guideSession.currentStep?.id === currentStep.id
+      && guideSessionMode === "worker"
+      && headTailDetection.status === "active"
+      && headTailDetection.faceDetectionReady
+      && hasFreshHeadTailObservation(observation)
+      && signature === candidate.signature;
+    if (!stillEligible) {
+      geminiAutoAdvanceCandidate.current = null;
+      setGeminiAutoAdvanceCount(0);
+    }
+  }, [
+    pageVisible,
+    screen,
+    cameraStatus,
+    cameraStream,
+    guideSession?.sessionId,
+    guideSession?.currentStepIndex,
+    guideSession?.currentStep?.id,
+    currentStep?.id,
+    activeStep,
+    guideSessionMode,
+    headTailDetection.status,
+    headTailDetection.faceDetectionReady,
+    headTailDetection.observation,
+  ]);
+
   const detectionTitle = headTailDetection.status === "active"
     ? "MediaPipe試験モデルで頭・尾を確認中"
     : headTailDetection.status === "loading"
@@ -1382,6 +1633,12 @@ function App() {
     && guideSessionMode === "worker"
     && !guideSessionLoading
     && (headTailDetection.status === "unavailable" || headTailDetection.status === "error");
+  const currentAnalysisContext = geminiAnalysis.context;
+  const currentAnalysis = currentAnalysisContext
+    && currentAnalysisContext.sessionId === guideSession?.sessionId
+    && currentAnalysisContext.stepId === currentStep?.id
+    ? geminiAnalysis.result
+    : undefined;
   const guideDetectionStatus = (() => {
     if (cameraStatus === "denied" || cameraStatus === "unavailable" || cameraStatus === "error") return "カメラを確認してみてね";
     if (!cameraStream || cameraStatus !== "active") return "カメラを起動すると先生が案内するよ";
@@ -1395,13 +1652,42 @@ function App() {
     if (geminiFaceBlocked) return "人の顔が映っているため、画像確認をスキップしたよ。魚と手元を映してね";
     if (geminiAnalysis.loading) return "今の手順を映像で確認中だよ";
     if (geminiAnalysis.error) return "うまく確認できなかったよ。手順を見ながら進めてね";
-    if (geminiAnalysis.result) {
-      const assessment = geminiAnalysis.result.stepAssessment;
-      if (geminiAnalysis.result.certainty === "uncertain") return "映像だけでは分からないみたい。手元を確認してね";
+    if (selectedGuideFishId === "salmon" && (currentStep?.id === "salmon_scale" || currentStep?.id === "salmon_bones")) {
+      const fishState = currentAnalysis?.fishStateAssessment
+        ? fishStateLabel(currentAnalysis.fishStateAssessment.state)
+        : "確認中";
+      const manualStepMessage = currentStep.id === "salmon_scale"
+        ? "うろこの残りは画像で判断できないよ。確認して「次の工程へ」を押してね"
+        : "小骨は映像だけでは確認できないよ。目と指で確認して「ガイドを完了」を押してね";
+      return `魚体の状態：${fishState}\n工程：${manualStepMessage}`;
+    }
+    if (selectedGuideFishId === "salmon" && currentAnalysis && currentStep) {
+      const fishState = currentAnalysis.fishStateAssessment
+        ? fishStateLabel(currentAnalysis.fishStateAssessment.state)
+        : "判別できない状態";
+      if (currentAnalysis.certainty === "uncertain" || currentAnalysis.fishStateAssessment?.state === "unknown"
+        || !currentAnalysis.fishStateAssessment) {
+        return `魚体の状態：${fishState}\n工程：映像だけでは分からないみたい。手元を確認してね`;
+      }
+      if (currentAnalysis.stepAssessment.status === "likely_complete") {
+        return `魚体の状態：${fishState}\n工程：できていそう！自動確認 ${geminiAutoAdvanceCount}/${GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS}`;
+      }
+      if (currentAnalysis.stepAssessment.status === "in_progress") {
+        return `魚体の状態：${fishState}\n工程：もう少しだね。手元を見ながら進めよう`;
+      }
+      return `魚体の状態：${fishState}\n工程：映像だけでは分からないみたい。手元を確認してね`;
+    }
+    if (selectedGuideFishId === "salmon" && geminiBaselineReady) {
+      return "工程開始時の状態を記録したよ\n作業が進んだら自動で確認するね";
+    }
+    if (currentAnalysis) {
+      const assessment = currentAnalysis.stepAssessment;
+      if (currentAnalysis.certainty === "uncertain") return "映像だけでは分からないみたい。手元を確認してね";
       if (assessment.status === "likely_complete") return "できていそう！手元も確認して次へ進もう";
       if (assessment.status === "in_progress") return "もう少しだね。手元を見ながら進めよう";
       return "映像だけでは分からないみたい。手元を確認してね";
     }
+    if (selectedGuideFishId === "salmon") return "頭か尾が映ると工程開始時の状態を記録するよ";
     return "";
   })();
   const guideDetectionStatusState = geminiFaceBlocked
@@ -1410,8 +1696,12 @@ function App() {
       ? "loading"
     : geminiAnalysis.error || headTailDetection.status === "error" || headTailDetection.status === "unavailable"
       ? "error"
-      : geminiAnalysis.result
-        ? (geminiAnalysis.result.certainty === "uncertain" ? "uncertain" : geminiAnalysis.result.stepAssessment.status)
+    : currentAnalysis
+        ? (currentAnalysis.certainty === "uncertain"
+          || currentAnalysis.fishStateAssessment?.state === "unknown"
+          || (selectedGuideFishId === "salmon" && !SALMON_AUTO_ADVANCE_STEP_IDS.has(currentStep?.id ?? ""))
+          ? "uncertain"
+          : currentAnalysis.stepAssessment.status)
         : headTailDetection.status;
   return (
     <main className={`app-root ${screen === "guide" ? "is-guide" : screen === "capture" ? "is-capture" : ""}`}>

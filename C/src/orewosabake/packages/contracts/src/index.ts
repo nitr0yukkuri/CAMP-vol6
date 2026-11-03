@@ -53,15 +53,33 @@ export const GuideRequestSchema = z.object({
 export const GuideImageAnalysisRequestSchema = z.object({
   fishId: FishIdSchema,
   stepId: z.string().min(1).max(100),
+  baselineImageData: z.string()
+    .max(2_900_000)
+    .regex(/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/, "JPEG形式の画像が必要です。")
+    .optional(),
   imageData: z.string()
     .max(2_900_000)
     .regex(/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/, "JPEG形式の画像が必要です。"),
+}).strict().superRefine((request, context) => {
+  if (request.baselineImageData && request.fishId !== "salmon") {
+    context.addIssue({
+      code: "custom",
+      path: ["baselineImageData"],
+      message: "工程開始時の画像比較はサーモン試作だけで利用できます。",
+    });
+  }
+});
+
+const FishStateAssessmentSchema = z.object({
+  state: FishStateSchema,
+  evidence: z.string().max(180),
 }).strict();
 
 const GuideImageAnalysisFieldsSchema = z.object({
   model: z.string().min(1),
   certainty: z.enum(["observed", "uncertain"]),
   visibleParts: z.array(z.enum(["head", "body", "tail"])).max(3),
+  fishStateAssessment: FishStateAssessmentSchema.optional(),
   stepAssessment: z.object({
     status: z.enum(["likely_complete", "in_progress", "uncertain"]),
     evidence: z.string().max(180),
@@ -71,15 +89,28 @@ const GuideImageAnalysisFieldsSchema = z.object({
 }).strict();
 
 function validateGuideImageAnalysisCertainty(
-  response: { certainty: "observed" | "uncertain"; stepAssessment: { status: "likely_complete" | "in_progress" | "uncertain" } },
+  response: {
+    certainty: "observed" | "uncertain";
+    fishStateAssessment?: { state: z.infer<typeof FishStateSchema> } | undefined;
+    stepAssessment: { status: "likely_complete" | "in_progress" | "uncertain" };
+  },
   context: z.RefinementCtx,
 ) {
-  if (response.certainty === "uncertain" && response.stepAssessment.status !== "uncertain") {
-    context.addIssue({
-      code: "custom",
-      path: ["stepAssessment", "status"],
-      message: "画像が不確実な場合、工程判定も不確実である必要があります。",
-    });
+  if (response.certainty === "uncertain") {
+    if (response.fishStateAssessment && response.fishStateAssessment.state !== "unknown") {
+      context.addIssue({
+        code: "custom",
+        path: ["fishStateAssessment", "state"],
+        message: "画像が不確実な場合、魚体状態は unknown である必要があります。",
+      });
+    }
+    if (response.stepAssessment.status !== "uncertain") {
+      context.addIssue({
+        code: "custom",
+        path: ["stepAssessment", "status"],
+        message: "画像が不確実な場合、工程判定も不確実である必要があります。",
+      });
+    }
   }
 }
 
@@ -88,10 +119,17 @@ export const GuideImageAnalysisResponseSchema = GuideImageAnalysisFieldsSchema
 export const GuideImageAnalysisResultSchema = GuideImageAnalysisFieldsSchema
   .omit({ model: true })
   .superRefine(validateGuideImageAnalysisCertainty);
+export const GuideSalmonImageAnalysisResponseSchema = GuideImageAnalysisFieldsSchema
+  .extend({ fishStateAssessment: FishStateAssessmentSchema })
+  .superRefine(validateGuideImageAnalysisCertainty);
+export const GuideSalmonImageAnalysisResultSchema = GuideImageAnalysisFieldsSchema
+  .omit({ model: true })
+  .extend({ fishStateAssessment: FishStateAssessmentSchema })
+  .superRefine(validateGuideImageAnalysisCertainty);
 
 export const AdvanceGuideStepRequestSchema = z.object({
   stepId: z.string().min(1),
-  source: z.enum(["button", "voice"]),
+  source: z.enum(["button", "voice", "vision"]),
   transcript: z.string().optional(),
 }).strict();
 

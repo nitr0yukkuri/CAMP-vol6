@@ -6,6 +6,8 @@ import {
   GuideImageAnalysisRequestSchema,
   GuideImageAnalysisResponseSchema,
   GuideImageAnalysisResultSchema,
+  GuideSalmonImageAnalysisResponseSchema,
+  GuideSalmonImageAnalysisResultSchema,
   GuideRequestSchema,
   GuideSessionSchema,
   getReferenceGuide,
@@ -19,7 +21,7 @@ import {
 import type { GuideImageAnalysisResponse } from "@orewosabake/contracts";
 
 const maxBodyBytes = 16 * 1024;
-const maxAnalysisBodyBytes = 2_950_000;
+const maxAnalysisBodyBytes = 5_900_000;
 const maxAnalysisImageBytes = 2_000_000;
 const analysisRateLimitCount = 10;
 const analysisRateLimitWindowMs = 60_000;
@@ -67,13 +69,17 @@ export default {
       const step = guide?.steps.find((candidate) => candidate.id === parsed.data.stepId);
       if (!guide || !step) return errorResponse(422, "GUIDE_STEP_NOT_FOUND", "選択中の魚種と工程を確認してください。");
       const base64 = parsed.data.imageData.slice(parsed.data.imageData.indexOf(",") + 1);
+      const baselineBase64 = parsed.data.baselineImageData?.slice(parsed.data.baselineImageData.indexOf(",") + 1);
       let decodedImageLength = 0;
+      let decodedBaselineLength = 0;
       try {
         decodedImageLength = atob(base64).length;
+        if (baselineBase64) decodedBaselineLength = atob(baselineBase64).length;
       } catch {
         return errorResponse(422, "INVALID_IMAGE", "JPEG画像を送信してください。");
       }
-      if (decodedImageLength > maxAnalysisImageBytes) return errorResponse(413, "IMAGE_TOO_LARGE", "画像サイズは2 MiB以下にしてください。");
+      if (decodedImageLength > maxAnalysisImageBytes || decodedBaselineLength > maxAnalysisImageBytes) return errorResponse(413, "IMAGE_TOO_LARGE", "画像サイズは1枚あたり2 MiB以下にしてください。");
+      if (decodedImageLength + decodedBaselineLength > maxAnalysisImageBytes * 2) return errorResponse(413, "IMAGES_TOO_LARGE", "画像の合計サイズは4 MiB以下にしてください。");
       const clientHash = await hashClientAddress(request.headers.get("cf-connecting-ip") ?? "local-development");
       const limitResponse = await env.GUIDE_SESSIONS.getByName("guide-sessions").fetch(new Request("https://guide-session.internal/internal/gemini-analysis-limit", {
         method: "POST",
@@ -82,7 +88,7 @@ export default {
       if (!limitResponse.ok) return limitResponse;
       try {
         const testScenario = env.GEMINI_TEST_MODE === "true" ? request.headers.get("x-k6-scenario") : null;
-        return json(await analyzeWithGemini(env, parsed.data.fishId, step.title, step.description, step.expectedState, base64, testScenario));
+        return json(await analyzeWithGemini(env, parsed.data.fishId, step.title, step.description, step.expectedState, baselineBase64, base64, testScenario));
       } catch (error) {
         if (error instanceof RequestError) return errorResponse(error.status, error.code, error.message);
         return errorResponse(502, "GEMINI_UPSTREAM_ERROR", "Gemini APIから応答を取得できませんでした。");
@@ -503,12 +509,51 @@ async function readRequestBody(request: Request, maxBytes = maxBodyBytes): Promi
   }
 }
 
+const geminiFishStateAssessmentSchema = {
+  type: "OBJECT",
+  properties: {
+    state: { type: "STRING", enum: ["whole_fish", "head_removed", "opened", "filleting", "filleted", "unknown"] },
+    evidence: { type: "STRING" },
+  },
+  required: ["state", "evidence"],
+  propertyOrdering: ["state", "evidence"],
+} as const;
+
+function createGeminiResponseSchema(includeFishState: boolean) {
+  const properties = {
+    certainty: { type: "STRING", enum: ["observed", "uncertain"] },
+    visibleParts: { type: "ARRAY", items: { type: "STRING", enum: ["head", "body", "tail"] } },
+    ...(includeFishState ? { fishStateAssessment: geminiFishStateAssessmentSchema } : {}),
+    stepAssessment: {
+      type: "OBJECT",
+      properties: {
+        status: { type: "STRING", enum: ["likely_complete", "in_progress", "uncertain"] },
+        evidence: { type: "STRING" },
+      },
+      required: ["status", "evidence"],
+      propertyOrdering: ["status", "evidence"],
+    },
+    evidence: { type: "STRING" },
+    caution: { type: "STRING" },
+  };
+  const required = [
+    "certainty",
+    "visibleParts",
+    ...(includeFishState ? ["fishStateAssessment"] : []),
+    "stepAssessment",
+    "evidence",
+    "caution",
+  ];
+  return { type: "OBJECT", properties, required, propertyOrdering: required };
+}
+
 async function analyzeWithGemini(
   env: Env,
   fishId: string,
   stepTitle: string,
   stepDescription: string,
   stepExpectedState: string,
+  baselineImageBase64: string | undefined,
   imageBase64: string,
   testScenario: string | null,
 ): Promise<GuideImageAnalysisResponse> {
@@ -523,47 +568,49 @@ async function analyzeWithGemini(
   const overallTimeoutMs = testMode ? readTestInteger(env.GEMINI_TEST_OVERALL_TIMEOUT_MS, 35_000, 100, 35_000) : 35_000;
   const retryBaseDelayMs = testMode ? readTestInteger(env.GEMINI_TEST_RETRY_BASE_DELAY_MS, 250, 1, 2_000) : 250;
   const deadline = Date.now() + overallTimeoutMs;
+  const isSalmon = fishId === "salmon";
   const requestBody = JSON.stringify({
     contents: [{ role: "user", parts: [
       { text: [
         "あなたは魚の調理工程を補助する画像確認役です。回答は日本語で、指定されたJSON形式だけにしてください。",
         "画像から直接見える事実だけを短く述べてください。魚種、鮮度、食用安全性、骨の完全な除去を保証してはいけません。",
         "visiblePartsでは画像内にはっきり見える頭・体・尾だけを返してください。",
-        "stepAssessment.status は、この画像の見た目が現在の工程をどこまで示しているかを慎重に推定してください。",
-        "likely_complete は工程完了を示す明確な見た目の証拠がある場合だけ、in_progress は明確に未完了と分かる場合だけにしてください。それ以外は uncertain にしてください。",
-        "うろこ取りや小骨確認など、画像だけで作業結果を確かめられない工程は uncertain にしてください。期待状態のラベルだけから完了を推測してはいけません。",
-        "工程の完了や安全性を保証せず、次の工程へ進めてもいけません。進行は利用者が操作します。",
-        "不鮮明、隠れている、画角外など判断できない場合は certainty と stepAssessment.status の両方を uncertain にしてください。",
+        ...(isSalmon ? [
+          "fishStateAssessmentでは魚体の見た目の状態を工程完了と独立して判定してください。whole_fish=丸のまま、opened=頭が付いていて腹が開かれた状態、head_removed=頭が外れた状態、filleting=片側の身が外れて中骨が見える状態、filleted=両側の身が骨から外れた状態、unknown=画像だけでは区別できない状態です。複数に当てはまる時は最も進んだ状態を返してください（filleted > filleting > head_removed > opened > whole_fish）。",
+          "fishStateAssessment.stateは画像内の魚体形状を根拠にし、現在工程や目標状態から推測してはいけません。証拠が足りなければunknownにしてください。evidenceには状態の根拠を短く記載してください。",
+        ] : []),
+        "stepAssessment.statusは、この画像の見た目が現在の工程をどこまで示しているかを慎重に推定してください。",
+        ...(baselineImageBase64
+          ? ["画像1は工程開始時、画像2は現在です。2枚の対象が同じ魚か確かめ、工程完了を示す変化が明瞭な時だけlikely_completeにしてください。明確に未完了と分かる時だけin_progress、それ以外はuncertainです。"]
+          : ["likely_complete は工程完了を示す明確な見た目の証拠がある場合だけ、in_progress は明確に未完了と分かる場合だけにしてください。それ以外は uncertain にしてください。"]),
+        ...(isSalmon ? [
+          "うろこの残りや骨・小骨の完全な除去、指で触れて確認する作業は画像だけでは証明できません。これらの工程をlikely_completeにしてはいけません。目標状態ラベルだけから完了を推測してはいけません。",
+          "不鮮明、隠れている、画角外など画像全体を判断できない場合はcertaintyをuncertain、fishStateAssessment.stateをunknown、stepAssessment.statusをuncertainにしてください。",
+        ] : [
+          "うろこ取りや小骨確認など、画像だけで作業結果を確かめられない工程は uncertain にしてください。目標状態ラベルだけから完了を推測してはいけません。",
+          "不鮮明、隠れている、画角外など判断できない場合は certainty と stepAssessment.status の両方を uncertain にしてください。",
+        ]),
+        isSalmon
+          ? "工程の完了や安全性を保証してはいけません。利用者が魚と手元を確認できる状態にしてください。"
+          : "工程の完了や安全性を保証せず、次の工程へ進めてもいけません。進行は利用者が操作します。",
         `魚種ID: ${fishId}`,
         `確認中の工程: ${stepTitle}`,
         `表示中の参考ガイドの説明: ${stepDescription}`,
-        `この工程の目安状態: ${stepExpectedState}`,
-        "stepAssessment.evidence は工程の見た目について、画像で確認できた短い根拠を書いてください。evidence は見える部位の根拠、caution は必要な場合の短い注意です。",
+        `この工程の目標となる魚体状態: ${stepExpectedState}`,
+        ...(baselineImageBase64
+          ? isSalmon
+            ? ["fishStateAssessment.evidenceは魚体状態の根拠、stepAssessment.evidenceは開始時と現在の比較に基づく工程の根拠です。evidenceは見える部位の根拠、cautionは必要な場合の短い注意です。2つの判定を混同しないでください。"]
+            : ["stepAssessment.evidenceは工程の見た目について、開始時と現在の画像で確認できた短い根拠を書いてください。evidenceは見える部位の根拠、cautionは必要な場合の短い注意です。"]
+          : isSalmon
+            ? ["fishStateAssessment.evidenceは魚体状態の根拠、stepAssessment.evidenceは現在画像に写る工程の根拠です。evidenceは見える部位の根拠、cautionは必要な場合の短い注意です。2つの判定を混同しないでください。"]
+            : ["stepAssessment.evidenceは工程の見た目について、画像で確認できた短い根拠を書いてください。evidenceは見える部位の根拠、cautionは必要な場合の短い注意です。"]),
       ].join("\n") },
+      ...(baselineImageBase64 ? [{ inlineData: { mimeType: "image/jpeg", data: baselineImageBase64 } }] : []),
       { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
     ] }],
     generationConfig: {
       responseMimeType: "application/json",
-      responseSchema: {
-        type: "OBJECT",
-        properties: {
-          certainty: { type: "STRING", enum: ["observed", "uncertain"] },
-          visibleParts: { type: "ARRAY", items: { type: "STRING", enum: ["head", "body", "tail"] } },
-          stepAssessment: {
-            type: "OBJECT",
-            properties: {
-              status: { type: "STRING", enum: ["likely_complete", "in_progress", "uncertain"] },
-              evidence: { type: "STRING" },
-            },
-            required: ["status", "evidence"],
-            propertyOrdering: ["status", "evidence"],
-          },
-          evidence: { type: "STRING" },
-          caution: { type: "STRING" },
-        },
-        required: ["certainty", "visibleParts", "stepAssessment", "evidence", "caution"],
-        propertyOrdering: ["certainty", "visibleParts", "stepAssessment", "evidence", "caution"],
-      },
+      responseSchema: createGeminiResponseSchema(isSalmon),
     },
   });
 
@@ -620,7 +667,12 @@ async function analyzeWithGemini(
     try {
       const text = payload?.candidates?.[0]?.content?.parts?.find((part) => part.text)?.text;
       if (!text) throw new Error("Empty Gemini response");
-      const result = GuideImageAnalysisResultSchema.parse(JSON.parse(text) as unknown);
+      const output = JSON.parse(text) as unknown;
+      if (isSalmon) {
+        const result = GuideSalmonImageAnalysisResultSchema.parse(output);
+        return GuideSalmonImageAnalysisResponseSchema.parse({ ...result, model });
+      }
+      const result = GuideImageAnalysisResultSchema.parse(output);
       return GuideImageAnalysisResponseSchema.parse({ ...result, model });
     } catch {
       throw new RequestError(502, "GEMINI_INVALID_RESPONSE", "Geminiの回答形式を確認できませんでした。もう一度お試しください。");

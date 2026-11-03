@@ -27,7 +27,7 @@ const port = Number(process.env.PORT ?? 3001);
 const host = process.env.HOST ?? "127.0.0.1";
 
 const MAX_BODY_BYTES = 16 * 1024;
-const MAX_ANALYSIS_BODY_BYTES = 2_950_000;
+const MAX_ANALYSIS_BODY_BYTES = 5_900_000;
 const MAX_ANALYSIS_IMAGE_BYTES = 2_000_000;
 const MAX_GUIDE_SESSIONS = 500;
 const GUIDE_SESSION_TTL_MS = 30 * 60 * 1000;
@@ -168,8 +168,15 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
       return;
     }
     const imageBytes = Buffer.from(parsed.data.imageData.slice(parsed.data.imageData.indexOf(",") + 1), "base64");
-    if (imageBytes.byteLength > MAX_ANALYSIS_IMAGE_BYTES) {
+    const baselineImageBytes = parsed.data.baselineImageData
+      ? Buffer.from(parsed.data.baselineImageData.slice(parsed.data.baselineImageData.indexOf(",") + 1), "base64")
+      : null;
+    if (imageBytes.byteLength > MAX_ANALYSIS_IMAGE_BYTES || (baselineImageBytes?.byteLength ?? 0) > MAX_ANALYSIS_IMAGE_BYTES) {
       sendError(response, 413, "IMAGE_TOO_LARGE", "画像サイズは2 MiB以下にしてください。");
+      return;
+    }
+    if (imageBytes.byteLength + (baselineImageBytes?.byteLength ?? 0) > MAX_ANALYSIS_IMAGE_BYTES * 2) {
+      sendError(response, 413, "IMAGES_TOO_LARGE", "画像の合計サイズは4 MiB以下にしてください。");
       return;
     }
     try {
@@ -178,6 +185,7 @@ async function handleRequest(request: import("node:http").IncomingMessage, respo
         model: process.env.GEMINI_MODEL,
         fishId: parsed.data.fishId,
         step,
+        ...(parsed.data.baselineImageData ? { baselineImageData: parsed.data.baselineImageData } : {}),
         imageData: parsed.data.imageData,
       });
       sendJson(response, 200, result);
