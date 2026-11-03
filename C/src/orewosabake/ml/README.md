@@ -167,3 +167,24 @@ The classifier currently trains only on the five known stages; `unknown` and `ot
 - [MediaPipe Image Classifier customization and TFLite export](https://developers.google.com/edge/mediapipe/solutions/customization/image_classifier)
 - [MediaPipe Tasks Image Classifier API](https://ai.google.dev/edge/api/mediapipe/python/mp/tasks/vision/ImageClassifier)
 - [Model Maker PyPI release and Python classifiers](https://pypi.org/project/mediapipe-model-maker/)
+
+
+## Gemini の手動評価パイロット
+
+撮影データのうち、人が `review_status=reviewed` にしたJPEGだけを、ローカルのNode.jsスクリプトからGeminiへ1枚ずつ送る評価用ツールです。Workerに評価APIを追加せず、APIキーもブラウザーへ渡しません。評価は研究用の小規模集計で、モデルの一般精度を示すものではありません。
+
+プロジェクトルートの `.env` または環境変数に `GEMINI_API_KEY` を設定し、次のように実行します。送信を明示する `--confirm-google-upload` がない場合はGoogleへの通信を開始しません。
+
+```powershell
+npm run pilot:gemini -- `
+  --manifest "D:\fish-pilot\aji_capture-manifest.csv" `
+  --images-dir "D:\fish-pilot" `
+  --output "D:\fish-pilot\gemini-results.csv" `
+  --confirm-google-upload
+```
+
+- 1回の実行は最大60枚、送信間隔は最低7.6秒です。Gemini APIのエラーが1件でも返ったら残りの画像は送らず、CSVに `skipped` として記録します。
+- 既存の出力CSVは上書きしません。画像ファイルは520 KB以下のJPEGに限ります。
+- マニフェストに `current_step_id` がない場合は、その魚の参考ガイド先頭工程を使います。これは比較条件を固定するための代替値で、撮影時の実工程を示すものではありません。
+- 画像とラベルをGoogleへ送信します。利用者が権利と送信先を確認し、明示的に許可したデータだけで実行してください。
+- 集計は独立した魚・撮影セッションで検証するまで、製品精度や学習用の正解率として扱わないでください。

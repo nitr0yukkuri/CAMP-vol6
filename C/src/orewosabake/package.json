@@ -20,7 +20,8 @@
     "preview:cloudflare": "wrangler dev --config apps/web/dist/worker/wrangler.json",
     "typecheck:web": "npm run typecheck --workspace @orewosabake/web",
     "typecheck:api": "npm run typecheck --workspace @orewosabake/api",
-    "typecheck:worker": "tsc --noEmit -p apps/web/tsconfig.worker.json"
+    "typecheck:worker": "tsc --noEmit -p apps/web/tsconfig.worker.json",
+    "pilot:gemini": "tsx ml/evaluate_gemini_pilot.ts"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.66.0",
