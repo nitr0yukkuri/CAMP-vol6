@@ -142,7 +142,7 @@ export class MediaPipeFishInference {
     fishStageModelPath?: string,
     faceModelPath = DEFAULT_FACE_MODEL_PATH,
   ): Promise<MediaPipeFishInference> {
-    // This task is created inside an ES module Worker, so load the matching ESM WASM glue.
+    // ESM WASM glue works in module Workers and in the page-thread fallback for mobile browsers.
     const wasmFiles = await FilesetResolver.forVisionTasks(wasmPath, true);
     const faceDetectorTask = (async () => {
       const controller = new AbortController();

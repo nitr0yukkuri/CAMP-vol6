@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 import { ObservationSchema, type GuideRequest, type Observation } from "@orewosabake/contracts";
 import type { HeadTailWorkerRequest, HeadTailWorkerResponse } from "../model/headTailWorkerProtocol";
 import { fishStageLabel, parseFishStage, type FishStage, type FishStageTransition } from "../model/fishStage";
+import type { MediaPipeFishInference } from "../model/mediapipeHeadTailDetector";
 
 export type HeadTailDetectionStatus = "idle" | "loading" | "active" | "paused" | "unavailable" | "error";
 
@@ -74,6 +75,10 @@ function rejectPendingFaceChecks(pending: Map<number, PendingFaceCheck>, error: 
 function errorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.replace(/\s+/g, " ").slice(0, 240) || "原因を特定できませんでした。";
+}
+
+function isDocumentUnavailableInWorker(error: unknown): boolean {
+  return /(?:can't find variable:\s*document|document is not defined|referenceerror:\s*document)/i.test(errorMessage(error));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -176,6 +181,7 @@ export function useHeadTailDetection(
   const [workerRestartKey, setWorkerRestartKey] = useState(0);
   const workerRef = useRef<Worker | null>(null);
   const workerReadyRef = useRef(false);
+  const mainThreadInferenceRef = useRef<MediaPipeFishInference | null>(null);
   const faceCheckRequestIdRef = useRef(0);
   const pendingFaceChecksRef = useRef(new Map<number, PendingFaceCheck>());
 
@@ -185,6 +191,18 @@ export function useHeadTailDetection(
       const abortError = new Error("画面が非表示のため人物チェックを開始しませんでした。");
       abortError.name = "AbortError";
       reject(abortError);
+      return;
+    }
+
+    const mainThreadInference = mainThreadInferenceRef.current;
+    if (mainThreadInference && workerReadyRef.current) {
+      try {
+        resolve(mainThreadInference.detectFacesInBitmap(bitmap, performance.now()));
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error("人物チェックに失敗しました。"));
+      } finally {
+        bitmap.close();
+      }
       return;
     }
 
@@ -234,6 +252,7 @@ export function useHeadTailDetection(
     let intervalId: number | undefined;
     let inferenceTimeoutId: number | undefined;
     let worker: Worker | null = null;
+    let mainThreadInference: MediaPipeFishInference | null = null;
     let stageCandidate: FishStage | null = null;
     let stageCandidateCount = 0;
     let stableStage: FishStage | null = null;
@@ -261,9 +280,12 @@ export function useHeadTailDetection(
       inferenceInFlight = false;
       workerReadyRef.current = false;
       if (workerRef.current === worker) workerRef.current = null;
+      if (mainThreadInferenceRef.current === mainThreadInference) mainThreadInferenceRef.current = null;
       rejectPendingFaceChecks(pendingFaceChecksRef.current, faceCheckError);
       worker?.terminate();
       worker = null;
+      mainThreadInference?.close();
+      mainThreadInference = null;
     };
 
     const fail = (error?: unknown) => {
@@ -342,10 +364,8 @@ export function useHeadTailDetection(
       }));
     };
 
-    const handleWorkerMessage = (event: MessageEvent<unknown>) => {
-      if (disposed || !worker || worker !== workerRef.current) return;
-      const data = event.data;
-      if (!isWorkerResponse(data) || data.type === "ready") {
+    const handleInferenceResponse = (data: HeadTailWorkerResponse) => {
+      if (data.type === "ready") {
         fail(new Error("認識Workerから予期しない応答が返りました。"));
         return;
       }
@@ -434,8 +454,18 @@ export function useHeadTailDetection(
       }));
     };
 
+    const handleWorkerMessage = (event: MessageEvent<unknown>) => {
+      if (disposed || !worker || worker !== workerRef.current) return;
+      const data = event.data;
+      if (!isWorkerResponse(data) || data.type === "ready") {
+        fail(new Error("認識Workerから予期しない応答が返りました。"));
+        return;
+      }
+      handleInferenceResponse(data);
+    };
+
     const startInference = async () => {
-      if (disposed || inferenceInFlight || !worker) return;
+      if (disposed || inferenceInFlight || (!worker && !mainThreadInference)) return;
       if (document.visibilityState !== "visible") {
         stageCandidate = null;
         stageCandidateCount = 0;
@@ -460,13 +490,21 @@ export function useHeadTailDetection(
           resizeHeight: Math.max(1, Math.round(video.videoHeight * scale)),
           resizeQuality: "high",
         });
-        if (disposed || !worker) {
+        if (disposed || (!worker && !mainThreadInference)) {
           bitmap.close();
           inferenceInFlight = false;
           return;
         }
 
-        worker.postMessage({
+        if (mainThreadInference) {
+          const result = mainThreadInference.detectBitmapFrame(bitmap, performance.now(), new Date().toISOString());
+          handleInferenceResponse({ type: "result", ...result });
+          bitmap.close();
+          bitmap = null;
+          return;
+        }
+
+        worker!.postMessage({
           type: "infer",
           bitmap,
           timestampMs: performance.now(),
@@ -481,7 +519,7 @@ export function useHeadTailDetection(
         bitmap?.close();
         inferenceInFlight = false;
         if (!restartAfterVisibility) {
-          fail(new Error(`カメラ画像を推論Workerへ渡せませんでした: ${errorMessage(error)}`));
+          fail(new Error(`カメラ画像の推論に失敗しました: ${errorMessage(error)}`));
         }
       }
     };
@@ -518,34 +556,66 @@ export function useHeadTailDetection(
           if (!fishStageModelPath) fishStageMessage = "この魚の状態判定モデルは未配置です。確認済みの撮影データで学習すると有効になります。";
         }
 
-        const inferenceWorker = new Worker(
-          new URL("../workers/headTailInference.worker.ts", import.meta.url),
-          { type: "module", name: "orewosabake-head-tail-inference" },
-        );
-        worker = inferenceWorker;
-        workerRef.current = inferenceWorker;
-        workerReadyRef.current = false;
-        const ready = await waitForWorkerReady(inferenceWorker, initializationController.signal, {
-          type: "initialize",
-          modelPath: MODEL_PATH,
-          wasmPath: WASM_PATH,
-          faceModelPath: FACE_MODEL_PATH,
-          ...(fishStageModelPath ? { fishStageModelPath } : {}),
-        });
+        let inferenceWorker: Worker | null = null;
+        let ready: Extract<HeadTailWorkerResponse, { type: "ready" }>;
+        try {
+          inferenceWorker = new Worker(
+            new URL("../workers/headTailInference.worker.ts", import.meta.url),
+            { type: "module", name: "orewosabake-head-tail-inference" },
+          );
+          worker = inferenceWorker;
+          workerRef.current = inferenceWorker;
+          workerReadyRef.current = false;
+          ready = await waitForWorkerReady(inferenceWorker, initializationController.signal, {
+            type: "initialize",
+            modelPath: MODEL_PATH,
+            wasmPath: WASM_PATH,
+            faceModelPath: FACE_MODEL_PATH,
+            ...(fishStageModelPath ? { fishStageModelPath } : {}),
+          });
+        } catch (workerError) {
+          if (!isDocumentUnavailableInWorker(workerError)) throw workerError;
+
+          inferenceWorker?.terminate();
+          if (worker === inferenceWorker) worker = null;
+          if (workerRef.current === inferenceWorker) workerRef.current = null;
+
+          // Some mobile browsers do not expose DOM APIs to module Workers. MediaPipe's
+          // WASM loader then tries to access `document`; initialize that same detector
+          // on the page thread so recognition can continue without restarting the camera.
+          const { MediaPipeFishInference: createInference } = await import("../model/mediapipeHeadTailDetector");
+          mainThreadInference = await createInference.create(MODEL_PATH, WASM_PATH, fishStageModelPath, FACE_MODEL_PATH);
+          if (disposed) {
+            mainThreadInference.close();
+            mainThreadInference = null;
+            return;
+          }
+          mainThreadInferenceRef.current = mainThreadInference;
+          ready = {
+            type: "ready",
+            fishStageStatus: mainThreadInference.fishStagePredictionStatus,
+            fishStageMessage: mainThreadInference.fishStageStatusMessage,
+            faceDetectionReady: mainThreadInference.faceDetectionReady,
+            faceDetectionMessage: mainThreadInference.faceDetectionStatusMessage,
+          };
+        }
 
         fishStageStatus = ready.fishStageStatus === "ready" ? "active" : ready.fishStageStatus;
         if (fishStageModelPath || !fishId) fishStageMessage = ready.fishStageMessage;
 
         if (disposed) {
-          inferenceWorker.terminate();
-          worker = null;
-          workerRef.current = null;
+          inferenceWorker?.terminate();
+          if (worker === inferenceWorker) worker = null;
+          if (workerRef.current === inferenceWorker) workerRef.current = null;
+          mainThreadInference?.close();
+          if (mainThreadInferenceRef.current === mainThreadInference) mainThreadInferenceRef.current = null;
+          mainThreadInference = null;
           return;
         }
 
         workerReadyRef.current = true;
-        inferenceWorker.addEventListener("message", handleWorkerMessage);
-        inferenceWorker.addEventListener("error", (event) => {
+        inferenceWorker?.addEventListener("message", handleWorkerMessage);
+        inferenceWorker?.addEventListener("error", (event) => {
           if (disposed || worker !== inferenceWorker || workerRef.current !== inferenceWorker) return;
           fail(event.message || "認識Workerが停止しました。");
         });
