@@ -72,7 +72,6 @@ type GeminiAutoDetectionWatch = {
   lastTriggeredAt: number;
   retryCount: number;
   retryAtMs: number;
-  pendingObservationAtMs: number | null;
 };
 
 function createGeminiAutoDetectionWatch(): GeminiAutoDetectionWatch {
@@ -86,7 +85,6 @@ function createGeminiAutoDetectionWatch(): GeminiAutoDetectionWatch {
     lastTriggeredAt: 0,
     retryCount: 0,
     retryAtMs: 0,
-    pendingObservationAtMs: null,
   };
 }
 
@@ -412,7 +410,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
           </li>
         </ol>
 
-        <p className="help-privacy-note">通常のカメラ映像は端末内で処理します。「MediaPipe検知時にGemini確認」に同意して有効にすると、頭または尾の初回検知、または新しい検知状態が3回連続で確認された時に、圧縮静止画を1枚だけGoogleへ送信します。連続動画やアプリへの画像保存はありません。頭・尾が見えないことだけで切除済みとは判断せず、工程も自動で進みません。チェックを外すと次回以降の自動送信を停止します。</p>
+        <p className="help-privacy-note">ガイド中、MediaPipeで頭・尾の検知状態が安定して変わると、圧縮した静止画をGoogle Geminiへ自動送信します。連続動画は送らず、画像はアプリに保存しません。Geminiの確認で工程が自動で進むことはありません。</p>
         <footer className="help-dialog-footer">
           <button type="button" onClick={() => dialogRef.current?.close()}>OK</button>
         </footer>
@@ -431,8 +429,7 @@ function App() {
   const [guideSessionMode, setGuideSessionMode] = useState<GuideSessionMode>("worker");
   const [guideSessionLoading, setGuideSessionLoading] = useState(false);
   const [guideMessage, setGuideMessage] = useState("");
-  const [geminiAnalysis, setGeminiAnalysis] = useState<{ loading: boolean; result?: GuideImageAnalysisResponse; error?: string }>({ loading: false });
-  const [geminiAutoEnabled, setGeminiAutoEnabled] = useState(false);
+  const [geminiAnalysis, setGeminiAnalysis] = useState<{ loading: boolean }>({ loading: false });
   const [geminiAutoPending, setGeminiAutoPending] = useState(false);
   const [geminiAutoCooldownTick, setGeminiAutoCooldownTick] = useState(0);
   const [pageVisible, setPageVisible] = useState(true);
@@ -600,7 +597,6 @@ function App() {
       pending: false,
       retryCount: 0,
       retryAtMs: 0,
-      pendingObservationAtMs: null,
     };
   }, [currentStep?.id]);
 
@@ -616,7 +612,6 @@ function App() {
     setGuideSessionLoading(false);
     setGuideMessage("");
     setGeminiAnalysis({ loading: false });
-    setGeminiAutoEnabled(false);
     setCameraMessage("");
 
     guideRequestController.current?.abort();
@@ -1097,64 +1092,41 @@ function App() {
     }
   }
 
-  async function analyzeCurrentCameraImage(isAutomatic = false): Promise<boolean> {
+  async function analyzeCurrentCameraImage(): Promise<boolean> {
     if (geminiAnalysis.loading || guideAdvancing || guideSessionLoading) return false;
-    if (!guideSession || !currentStep || !selectedGuideFishId || !videoRef.current || cameraStatus !== "active") {
-      setGeminiAnalysis({ loading: false, error: "カメラ映像と現在の工程を確認してください。" });
-      return false;
-    }
+    if (!guideSession || !currentStep || !selectedGuideFishId || !videoRef.current || cameraStatus !== "active") return false;
+
     const signal = guideRequestController.current?.signal;
-    if (!signal || signal.aborted) {
-      setGeminiAnalysis({ loading: false, error: "ガイドを開始し直してください。" });
-      return false;
-    }
+    if (!signal || signal.aborted) return false;
+
     const requestId = ++geminiAnalysisRequestId.current;
     setGeminiAnalysis({ loading: true });
-    const frameCapturedAtMs = Date.now();
     try {
       const frame = await captureCurrentFrame(videoRef.current);
       if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return false;
       const imageData = await blobToDataUrl(frame.blob);
       if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return false;
       geminiAutoDetectionWatch.current.lastTriggeredAt = Date.now();
-      const result = await analyzeGuideImage({ fishId: selectedGuideFishId, stepId: currentStep.id, imageData }, signal);
+      await analyzeGuideImage({ fishId: selectedGuideFishId, stepId: currentStep.id, imageData }, signal);
       if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return false;
-      setGeminiAnalysis({ loading: false, result });
-      if (!isAutomatic) {
-        const watch = geminiAutoDetectionWatch.current;
-        if (watch.pending && watch.pendingObservationAtMs !== null && watch.pendingObservationAtMs <= frameCapturedAtMs) {
-          watch.pending = false;
-          watch.pendingObservationAtMs = null;
-          watch.retryCount = 0;
-          watch.retryAtMs = 0;
-          setGeminiAutoPending(false);
-          setGeminiAutoCooldownTick((tick) => tick + 1);
-        }
-      }
+      setGeminiAnalysis({ loading: false });
       return true;
-    } catch (error) {
-      if (!signal.aborted && requestId === geminiAnalysisRequestId.current) setGeminiAnalysis({ loading: false, error: error instanceof Error ? error.message : "画像をAIで確認できませんでした。" });
+    } catch {
+      if (!signal.aborted && requestId === geminiAnalysisRequestId.current) setGeminiAnalysis({ loading: false });
       return false;
     }
   }
 
   useEffect(() => {
-    geminiAutoAnalyzerRef.current = () => analyzeCurrentCameraImage(true);
+    geminiAutoAnalyzerRef.current = () => analyzeCurrentCameraImage();
   });
 
   useEffect(() => {
     const watch = geminiAutoDetectionWatch.current;
-    if (!geminiAutoEnabled) {
-      if (watch.pending) setGeminiAutoPending(false);
-      geminiAutoDetectionWatch.current = createGeminiAutoDetectionWatch();
-      return;
-    }
-
     if (screen !== "guide" || cameraStatus !== "active" || !cameraStream || !guideSession
       || guideSessionMode !== "worker" || guideSession.status === "completed" || guideIsComplete) {
       geminiAutoDetectionWatch.current = createGeminiAutoDetectionWatch();
       if (watch.pending) setGeminiAutoPending(false);
-      setGeminiAutoEnabled(false);
       return;
     }
 
@@ -1164,13 +1136,12 @@ function App() {
       watch.candidateCount = 0;
       watch.candidateCapturedAtMs = null;
     }
-  }, [geminiAutoEnabled, pageVisible, screen, cameraStatus, cameraStream, guideSession?.sessionId, guideSession?.status, guideSessionMode, guideIsComplete]);
+  }, [pageVisible, screen, cameraStatus, cameraStream, guideSession?.sessionId, guideSession?.status, guideSessionMode, guideIsComplete]);
 
   useEffect(() => {
     const watch = geminiAutoDetectionWatch.current;
     const observation = headTailDetection.observation;
-    const active = geminiAutoEnabled
-      && pageVisible
+    const active = pageVisible
       && screen === "guide"
       && cameraStatus === "active"
       && cameraStream !== null
@@ -1223,11 +1194,10 @@ function App() {
     if (watch.retryAtMs > 0) setGeminiAutoCooldownTick((tick) => tick + 1);
     watch.retryCount = 0;
     watch.retryAtMs = 0;
-    watch.pendingObservationAtMs = capturedAtMs;
+
     watch.pending = true;
     setGeminiAutoPending(true);
   }, [
-    geminiAutoEnabled,
     pageVisible,
     screen,
     cameraStatus,
@@ -1241,7 +1211,7 @@ function App() {
   ]);
 
   useEffect(() => {
-    if (!geminiAutoEnabled || !geminiAutoPending || !pageVisible) return;
+    if (!geminiAutoPending || !pageVisible) return;
     if (screen !== "guide" || cameraStatus !== "active" || !cameraStream || !guideSession
       || guideSessionMode !== "worker" || guideSession.status === "completed" || guideIsComplete
       || headTailDetection.status !== "active" || geminiAnalysis.loading || guideSessionLoading || guideAdvancing) return;
@@ -1271,7 +1241,6 @@ function App() {
       if (succeeded) {
         watch.retryCount = 0;
         watch.retryAtMs = 0;
-        if (!watch.pending) watch.pendingObservationAtMs = null;
         return;
       }
 
@@ -1291,7 +1260,6 @@ function App() {
       setGeminiAutoPending(true);
     })();
   }, [
-    geminiAutoEnabled,
     geminiAutoPending,
     geminiAutoCooldownTick,
     pageVisible,
@@ -1610,7 +1578,7 @@ function App() {
             <div className="guide-layout">
               <div className="guide-stage">
                 <section className="camera-card" aria-label="カメラプレビュー">
-                  <div className="camera-topline"><span>カメラプレビュー</span><span>MediaPipe検知時または確認ボタンで静止画をGeminiへ送信</span></div>
+                  <div className="camera-topline"><span>カメラプレビュー</span></div>
                   {cameraStream ? (
                     <video ref={videoRef} autoPlay muted playsInline aria-label="カメラ映像" />
                   ) : (
@@ -1647,44 +1615,6 @@ function App() {
                     <h2>{currentStep.title}</h2>
                     <p>{currentStep.description}</p>
                     {guideMessage ? <p className="guide-message" role="status">{guideMessage}</p> : null}
-                    <div className="gemini-guide-check">
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={geminiAutoEnabled}
-                          onChange={(event) => setGeminiAutoEnabled(event.currentTarget.checked)}
-                          disabled={(!geminiAutoEnabled && cameraStatus !== "active") || guideSessionMode !== "worker" || guideSessionLoading || guideAdvancing || guideIsComplete}
-                        />
-                        <span>同意してMediaPipe検知時にGemini確認</span>
-                      </label>
-                      <button type="button" onClick={() => void analyzeCurrentCameraImage()} disabled={cameraStatus !== "active" || geminiAnalysis.loading || guideSessionLoading || guideAdvancing}>
-                        {geminiAnalysis.loading ? "Geminiが画像を確認中…" : "この画像をGeminiで確認"}
-                      </button>
-                      {geminiAutoEnabled ? (
-                        <small className="gemini-auto-status" role="status">
-                          {!pageVisible
-                            ? "画面を表示するとMediaPipe検知を再開します"
-                            : geminiAnalysis.loading
-                              ? "Geminiが画像を確認中…"
-                              : geminiAutoPending
-                                ? "検知変化をGeminiへ送信待ち…"
-                                : headTailDetection.status === "active"
-                                  ? "MediaPipeが頭・尾の検知変化を待っています"
-                                  : headTailDetection.status === "error" || headTailDetection.status === "unavailable"
-                                    ? "MediaPipeを利用できません。認識モデルを確認してください"
-                                    : "MediaPipeの準備を待っています"}
-                        </small>
-                      ) : null}
-                      {geminiAnalysis.result ? (
-                        <div className="gemini-guide-result" data-certainty={geminiAnalysis.result.certainty} role="status">
-                          <strong>{geminiAnalysis.result.certainty === "observed" ? "画像で見えたこと" : "画像だけでは判断できません"}</strong>
-                          <span>{geminiAnalysis.result.evidence}</span>
-                          {geminiAnalysis.result.visibleParts.length ? <span>見えている部分：{geminiAnalysis.result.visibleParts.join("・")}</span> : null}
-                          {geminiAnalysis.result.caution ? <span>{geminiAnalysis.result.caution}</span> : null}
-                        </div>
-                      ) : null}
-                      {geminiAnalysis.error ? <p className="guide-message" role="alert">{geminiAnalysis.error}</p> : null}
-                    </div>
                   </div>
                 ) : (
                   <div className="guide-step guide-empty-state" aria-live="polite">
