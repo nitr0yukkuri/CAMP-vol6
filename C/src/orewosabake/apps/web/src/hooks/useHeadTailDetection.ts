@@ -183,17 +183,21 @@ export function useHeadTailDetection(
       worker = null;
     };
 
-    const fail = () => {
+    const fail = (error: unknown = ERROR_MESSAGE) => {
       if (disposed) return;
       stopInference();
       fishStageStatus = "error";
       fishStageMessage = "工程判定Workerでエラーが発生しました。";
       setDetection({
         status: "error",
-        message: ERROR_MESSAGE,
+        message: `MediaPipe: ${errorMessage(error)}`,
         observation: null,
         fishStage: { status: "error", message: fishStageMessage, stage: null, score: null, transition: lastStageTransition },
       });
+    };
+
+    const handleInferenceWorkerError = (event: ErrorEvent) => {
+      fail(event.message || "認識Workerが停止しました。");
     };
 
     const handleFishStagePrediction = (prediction: { label: string; score: number; capturedAt: string } | null | undefined) => {
@@ -259,7 +263,7 @@ export function useHeadTailDetection(
 
     const handleWorkerMessage = (event: MessageEvent<unknown>) => {
       if (!isWorkerResponse(event.data) || event.data.type === "ready") {
-        fail();
+        fail("認識Workerから予期しない応答が返りました。");
         return;
       }
 
@@ -268,13 +272,13 @@ export function useHeadTailDetection(
       inferenceInFlight = false;
 
       if (event.data.type === "error") {
-        fail();
+        fail(`MediaPipe推論Workerでエラー: ${event.data.message}`);
         return;
       }
 
       const parsedObservation = ObservationSchema.safeParse(event.data.observation);
       if (!parsedObservation.success) {
-        fail();
+        fail("MediaPipeの検出結果を読み取れません。アプリを再読み込みしてください。");
         return;
       }
 
@@ -365,11 +369,14 @@ export function useHeadTailDetection(
           capturedAt: new Date().toISOString(),
         } satisfies HeadTailWorkerRequest, [bitmap]);
         bitmap = null;
-        inferenceTimeoutId = window.setTimeout(fail, INFERENCE_TIMEOUT_MS);
-      } catch {
+        inferenceTimeoutId = window.setTimeout(
+          () => fail(`MediaPipe推論が${INFERENCE_TIMEOUT_MS / 1_000}秒以内に応答しませんでした。`),
+          INFERENCE_TIMEOUT_MS,
+        );
+      } catch (error) {
         bitmap?.close();
         inferenceInFlight = false;
-        fail();
+        fail(`カメラ画像を推論Workerへ渡せませんでした: ${errorMessage(error)}`);
       }
     };
 
@@ -427,7 +434,7 @@ export function useHeadTailDetection(
         }
 
         inferenceWorker.addEventListener("message", handleWorkerMessage);
-        inferenceWorker.addEventListener("error", fail);
+        inferenceWorker.addEventListener("error", handleInferenceWorkerError);
         const hidden = document.visibilityState !== "visible";
         setDetection({
           status: hidden ? "paused" : "active",
@@ -452,7 +459,7 @@ export function useHeadTailDetection(
           setDetection({
             status: modelMissing ? "unavailable" : "error",
             message: modelMissing
-              ? "認識モデルが未配置です。mlの学習手順を実行すると検出が有効になります。"
+              ? `認識モデルの読み込みに失敗しました。${errorMessage(error)}`
               : `MediaPipeを初期化できませんでした。${errorMessage(error)}`,
             observation: null,
             fishStage: {
