@@ -26,6 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GENERATED_ROOT = PROJECT_ROOT / "ml" / "generated"
 SPLITS = {"train", "validation", "test"}
 PARTS = {"head": 1, "tail": 2}
+NON_FISH_CATEGORY_ID = 3
 VISIBLE_STATES = {"present_visible", "removed_confirmed"}
 
 
@@ -140,10 +141,24 @@ def normalized_box(row: dict[str, str], part: str, row_number: int) -> list[floa
     return [x, y, width, height]
 
 
+def validate_non_fish_row(row: dict[str, str], row_number: int) -> None:
+    if row.get("review_status", "").strip() != "reviewed":
+        raise ValueError(f"CSV row {row_number}: non-fish frame has not been human reviewed")
+    for part in PARTS:
+        state = row.get(f"{part}_status", "").strip()
+        source = row.get(f"{part}_status_source", "").strip()
+        box_source = row.get(f"{part}_bbox_source", "").strip()
+        values = [row.get(f"{part}_bbox_{suffix}", "").strip() for suffix in ("x", "y", "width", "height")]
+        if state not in {"", "unknown"} or source not in {"", "unknown", "manual"}:
+            raise ValueError(f"CSV row {row_number}: non-fish frame must not claim a head or tail state")
+        if any(values) or box_source == "manual":
+            raise ValueError(f"CSV row {row_number}: non-fish frame must not contain head or tail boxes")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True, help="capture-manifest.csv")
-    parser.add_argument("--images-dir", type=Path, required=True, help="folder containing the captured JPEG files")
+    parser.add_argument("--images-dir", type=Path, required=True, help="folder containing reviewed JPEG, PNG, or WebP images")
     parser.add_argument("--output", type=Path, default=GENERATED_ROOT / "phone-capture")
     parser.add_argument("--write-split-template", action="store_true", help="write a blank grouped split CSV and stop")
     parser.add_argument("--split-map", type=Path, help="completed group-split-template.csv with all 3 split names")
@@ -221,12 +236,20 @@ def main() -> int:
             excluded["missing_image_file"] += 1
             continue
 
+        image_class = row.get("image_class", "").strip().lower() or "fish"
+        if image_class not in {"fish", "non_fish"}:
+            excluded["invalid_image_class"] += 1
+            continue
         try:
-            boxes = {part: normalized_box(row, part, row_number) for part in PARTS}
+            if image_class == "non_fish":
+                validate_non_fish_row(row, row_number)
+                boxes = {part: None for part in PARTS}
+            else:
+                boxes = {part: normalized_box(row, part, row_number) for part in PARTS}
         except ValueError as error:
             excluded[str(error).split(": ", 1)[-1].split(" (")[0]] += 1
             continue
-        if not any(boxes.values()):
+        if image_class == "fish" and not any(boxes.values()):
             excluded["no_visible_head_or_tail_box"] += 1
             continue
         try:
@@ -242,17 +265,21 @@ def main() -> int:
             "width": width,
             "height": height,
             "boxes": boxes,
+            "image_class": image_class,
             "group_id": group_id,
         })
 
     empty_splits = [split for split, images in prepared.items() if not images]
     if empty_splits:
         parser.error(f"no eligible reviewed images in split(s): {', '.join(sorted(empty_splits))}")
+    has_non_fish = any(item["image_class"] == "non_fish" for images in prepared.values() for item in images)
     for split, images in prepared.items():
         counts = Counter(part for image in images for part, box in image["boxes"].items() if box)
         missing_classes = set(PARTS) - counts.keys()
         if missing_classes:
             parser.error(f"{split} lacks manually reviewed positive boxes for: {', '.join(sorted(missing_classes))}")
+        if has_non_fish and not any(image["image_class"] == "non_fish" for image in images):
+            parser.error(f"{split} lacks a human-reviewed non-fish example; keep negative data in every split")
 
     output_root.mkdir(parents=True, exist_ok=True)
     summary: dict[str, Any] = {
@@ -263,6 +290,8 @@ def main() -> int:
         "splits": {},
     }
     categories = [{"id": 1, "name": "head"}, {"id": 2, "name": "tail"}]
+    if has_non_fish:
+        categories.append({"id": NON_FISH_CATEGORY_ID, "name": "non_fish"})
     for split in sorted(SPLITS):
         split_root = output_root / "coco" / split
         images_dir = split_root / "images"
@@ -272,7 +301,23 @@ def main() -> int:
         class_counts: Counter[str] = Counter()
         for image_id, item in enumerate(prepared[split], 1):
             shutil.copy2(item["path"], images_dir / item["name"])
-            coco_images.append({"id": image_id, "file_name": item["name"], "width": item["width"], "height": item["height"]})
+            coco_images.append({
+                "id": image_id,
+                "file_name": item["name"],
+                "width": item["width"],
+                "height": item["height"],
+                "image_class": item["image_class"],
+            })
+            if item["image_class"] == "non_fish":
+                annotations.append({
+                    "id": len(annotations) + 1,
+                    "image_id": image_id,
+                    "category_id": NON_FISH_CATEGORY_ID,
+                    "bbox": [0, 0, item["width"], item["height"]],
+                    "area": item["width"] * item["height"],
+                    "iscrowd": 0,
+                })
+                class_counts["non_fish"] += 1
             for part, category_id in PARTS.items():
                 box = item["boxes"][part]
                 if not box:
@@ -289,14 +334,19 @@ def main() -> int:
                 })
                 class_counts[part] += 1
         payload = {
-            "info": {"description": "Human-reviewed phone capture head/tail boxes"},
+            "info": {"description": "Human-reviewed phone capture head/tail boxes and full-frame non-fish examples"},
             "licenses": [],
             "images": coco_images,
             "annotations": annotations,
             "categories": categories,
         }
         (split_root / "labels.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        summary["splits"][split] = {"images": len(coco_images), "annotations": len(annotations), "class_counts": dict(sorted(class_counts.items()))}
+        summary["splits"][split] = {
+            "images": len(coco_images),
+            "image_class_counts": dict(sorted(Counter(item["image_class"] for item in images).items())),
+            "annotations": len(annotations),
+            "class_counts": dict(sorted(class_counts.items())),
+        }
 
     summary_path = output_root / "phone-capture-summary.json"
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -34,6 +34,7 @@ TEST_DAYS = {"20191114"}
 CLASS_NAMES = {0: "head", 1: "tail"}
 APP_MAX_RESULTS = 12
 DIAGNOSTIC_MAX_RESULTS = 100
+NON_FISH_GATE_SCORE_THRESHOLD = 0.5
 IMAGE_NAME_PATTERN = re.compile(r"^IMG_(\d{8})_\d{6}$")
 
 
@@ -468,6 +469,9 @@ def collect_exported_predictions(
     labels_path = split_root / "labels.json"
     payload = json.loads(labels_path.read_text(encoding="utf-8"))
     category_names = {category["id"]: category["name"] for category in payload["categories"]}
+    category_allowlist = ["head", "tail"]
+    if "non_fish" in category_names.values():
+        category_allowlist.append("non_fish")
     annotations_by_image: dict[int, list[dict[str, Any]]] = {}
     for annotation in payload["annotations"]:
         annotations_by_image.setdefault(annotation["image_id"], []).append(annotation)
@@ -477,7 +481,7 @@ def collect_exported_predictions(
         running_mode=vision.RunningMode.IMAGE,
         max_results=max_results,
         score_threshold=0.001,
-        category_allowlist=["head", "tail"],
+        category_allowlist=category_allowlist,
     )
     detector = vision.ObjectDetector.create_from_options(options)
     predictions: list[dict[str, Any]] = []
@@ -491,7 +495,7 @@ def collect_exported_predictions(
             for detection in result.detections:
                 category = detection.categories[0] if detection.categories else None
                 box = detection.bounding_box
-                if category is None or category.category_name not in {"head", "tail"}:
+                if category is None or category.category_name not in {"head", "tail", "non_fish"}:
                     continue
                 image_detections.append({
                     "label": category.category_name,
@@ -503,6 +507,7 @@ def collect_exported_predictions(
                 "file_name": image_record["file_name"],
                 "width": image_record["width"],
                 "height": image_record["height"],
+                "image_class": image_record.get("image_class", "fish"),
                 "inference_ms": inference_ms,
                 "ground_truth": [
                     {
@@ -733,6 +738,21 @@ def evaluate_detections(predictions: list[dict[str, Any]], score_threshold: floa
         }
         f1_values.append(f1)
 
+    negative_images = [image for image in predictions if image.get("image_class") == "non_fish"]
+    negative_images_with_fish_detections = [
+        image for image in negative_images
+        if any(row["label"] in {"head", "tail"} and row["score"] >= score_threshold for row in image["detections"])
+    ]
+    negative_images_gated = [
+        image for image in negative_images
+        if any(row["label"] == "non_fish" and row["score"] >= NON_FISH_GATE_SCORE_THRESHOLD for row in image["detections"])
+    ]
+    fish_images = [image for image in predictions if image.get("image_class") != "non_fish"]
+    fish_images_gated = [
+        image for image in fish_images
+        if any(row["label"] == "non_fish" and row["score"] >= NON_FISH_GATE_SCORE_THRESHOLD for row in image["detections"])
+    ]
+
     return {
         "images": len(predictions),
         "score_threshold": score_threshold,
@@ -740,6 +760,17 @@ def evaluate_detections(predictions: list[dict[str, Any]], score_threshold: floa
         "matching": "per-image greedy, one-to-one, same class",
         "per_class": per_class,
         "macro_f1": round(sum(f1_values) / len(f1_values), 4),
+        "negative_scene_evaluation": {
+            "negative_images": len(negative_images),
+            "negative_images_with_head_tail_false_positive": len(negative_images_with_fish_detections),
+            "head_tail_false_positive_image_rate": round(len(negative_images_with_fish_detections) / max(1, len(negative_images)), 4),
+            "negative_images_rejected_by_non_fish_class": len(negative_images_gated),
+            "non_fish_recall_at_gate_threshold": round(len(negative_images_gated) / max(1, len(negative_images)), 4),
+            "fish_images_rejected_by_non_fish_class": len(fish_images_gated),
+            "fish_rejection_rate_at_gate_threshold": round(len(fish_images_gated) / max(1, len(fish_images)), 4),
+            "gate_score_threshold": NON_FISH_GATE_SCORE_THRESHOLD,
+            "gate_policy": "suppress all head/tail detections when any non_fish detection reaches the gate threshold",
+        },
     }
 
 

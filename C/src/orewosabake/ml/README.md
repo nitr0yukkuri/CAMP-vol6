@@ -79,14 +79,14 @@ python ml/train_detector.py --prepare-only --force
 
 It creates the converted COCO images/labels under ignored `ml/generated/coco/`, plus `split-manifest.json` and `prepare-summary.json`. `--force` only replaces that generated COCO conversion.
 
-Phone-capture data has a separate preparation path; it never overwrites the public Mendeley conversion or silently joins a training run. Follow [the capture and review procedure](../data/phone-capture/README.md), first generate a grouped split template, then edit and pass the split map:
+Phone-capture data has a separate preparation path; it never overwrites the public Mendeley conversion or silently joins a training run. The public app has no research-capture screen: collect images and maintain the empty manifest locally, following [the capture and review procedure](../data/phone-capture/README.md). Then generate a grouped split template, assign the groups, and pass the split map:
 
 ```powershell
 python ml/prepare_phone_capture.py --manifest "D:\fish-pilot\capture-manifest.csv" --images-dir "D:\fish-pilot" --output ml/generated/phone-capture/split-plan --write-split-template
 python ml/prepare_phone_capture.py --manifest "D:\fish-pilot\capture-manifest.csv" --images-dir "D:\fish-pilot" --output ml/generated/phone-capture/converted --split-map ml/generated/phone-capture/split-plan/group-split-template.csv
 ```
 
-The phone-data converter joins rows that share either a `fish_id` or a `session_id`, and requires each resulting group to appear in exactly one of train/validation/test. It admits only human-reviewed status labels and manual boxes for visible parts; uncertain visibility or AI-only boxes are excluded. All three splits need images and positive examples of both classes. These guardrails prevent a small pilot from producing a misleading held-out score. The converter prepares COCO data only. Training on that data and reporting its results remain pending until distinct reviewed groups have been collected.
+The phone-data converter joins rows that share either a `fish_id` or a `session_id`, and requires each resulting group to appear in exactly one of train/validation/test. It admits only human-reviewed status labels and manual boxes for visible parts; uncertain visibility or AI-only boxes are excluded. All three splits need fish images with positive head and tail boxes. Rows marked `image_class=non_fish` are accepted only after human review and with empty head/tail labels and boxes; COCO conversion gives each a full-frame non-fish annotation so the detector can learn negative scenes. If negative examples are present, every split must include an independent negative group. These guardrails prevent a small pilot from producing a misleading held-out score. The converter prepares COCO data only. Training on that data and reporting its results remain pending until distinct reviewed groups have been collected.
 
 When those groups exist, run the model commands from the WSL Python 3.10 environment created by `ml/setup-wsl-training.sh`. First measure the current Mendeley model against the phone validation/test sets at its current threshold without changing the app model. Then train and evaluate a phone-set model:
 
@@ -96,7 +96,7 @@ model_maker_python="${XDG_DATA_HOME:-$HOME/.local/share}/orewosabake/model-maker
 "$model_maker_python" ml/train_detector.py --generated ml/generated/phone-capture/converted --prepared-only
 ```
 
-The first command keeps the existing threshold fixed to reveal the domain gap. The second uses the grouped phone train/validation/test data and copies the newly trained model into `apps/web/public/models/head-tail.tflite` after compatibility evaluation. This replaces the model file in the current checkout; keep the first report so you can compare it. Treat the test metrics as the final held-out result; do not use its errors to change labels, thresholds, or training choices and then report the same test again.
+The first command keeps the existing threshold fixed to reveal the domain gap. The second uses the grouped phone train/validation/test data and copies the newly trained model into `apps/web/public/models/head-tail.tflite` after compatibility evaluation. This replaces the model file in the current checkout; keep the first report so you can compare it. The detector report includes negative-scene false-positive rate, non-fish recall at the fixed 0.5 gate, and the fish-image rejection rate. The 0.5 gate is a comparison point, not a calibrated default. Inspect fish misses and false rejections together before promoting a model. Treat the test metrics as the final held-out result; do not use its errors to change labels, thresholds, or training choices and then report the same test again.
 
 For training, use Ubuntu on WSL. From the project directory in WSL, prepare the isolated Python 3.10 environment and pinned dependencies:
 
