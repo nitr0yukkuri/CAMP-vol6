@@ -88,6 +88,16 @@ function createGeminiAutoDetectionWatch(): GeminiAutoDetectionWatch {
   };
 }
 
+function hasFreshHeadTailObservation(observation: Observation | null): observation is Observation {
+  if (!observation || observation.source !== "mediapipe") return false;
+  const ageMs = Date.now() - Date.parse(observation.capturedAt);
+  return Number.isFinite(ageMs)
+    && ageMs >= 0
+    && ageMs <= GEMINI_AUTO_MAX_OBSERVATION_AGE_MS
+    && observation.detections.some((detection) => detection.label === "head" || detection.label === "tail");
+}
+
+
 type Fish = {
   name: string;
   category: Exclude<Category, "よく使う">;
@@ -1110,6 +1120,7 @@ function App() {
   async function analyzeCurrentCameraImage(expectedSignature: string): Promise<boolean> {
     if (geminiAnalysis.loading || guideAdvancing || guideSessionLoading) return false;
     if (!guideSession || !currentStep || !selectedGuideFishId || !videoRef.current || cameraStatus !== "active") return false;
+    if (!hasFreshHeadTailObservation(headTailDetection.observation)) return false;
     if (!headTailDetection.faceDetectionReady) return false;
 
     const signal = guideRequestController.current?.signal;
@@ -1191,12 +1202,29 @@ function App() {
       resetCandidate();
       return;
     }
+    const hasHeadOrTail = observation.detections.some((detection) => detection.label === "head" || detection.label === "tail");
+    if (!hasHeadOrTail) {
+      resetCandidate();
+      watch.stableSignature = null;
+      watch.retryCount = 0;
+      watch.retryAtMs = 0;
+      if (watch.pending) {
+        watch.pending = false;
+        setGeminiAutoPending(false);
+      }
+      return;
+    }
     if (watch.lastObservationAt === observation.capturedAt) return;
 
     const capturedAtMs = Date.parse(observation.capturedAt);
     const now = Date.now();
     if (!Number.isFinite(capturedAtMs) || capturedAtMs > now || now - capturedAtMs > GEMINI_AUTO_MAX_OBSERVATION_AGE_MS) {
       resetCandidate();
+      watch.stableSignature = null;
+      if (watch.pending) {
+        watch.pending = false;
+        setGeminiAutoPending(false);
+      }
       return;
     }
 
@@ -1252,6 +1280,13 @@ function App() {
       || geminiAnalysis.loading || guideSessionLoading || guideAdvancing) return;
 
     const watch = geminiAutoDetectionWatch.current;
+    if (!hasFreshHeadTailObservation(headTailDetection.observation)) {
+      watch.pending = false;
+      watch.retryCount = 0;
+      watch.retryAtMs = 0;
+      setGeminiAutoPending(false);
+      return;
+    }
     const nextEligibleAt = Math.max(
       watch.lastTriggeredAt + GEMINI_AUTO_MIN_INTERVAL_MS,
       watch.retryAtMs,
@@ -1313,6 +1348,7 @@ function App() {
     geminiAnalysis.loading,
     guideSessionLoading,
     guideAdvancing,
+    headTailDetection.observation,
   ]);
 
   const detectionTitle = headTailDetection.status === "active"
