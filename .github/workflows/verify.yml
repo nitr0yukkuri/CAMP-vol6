@@ -1,0 +1,66 @@
+name: PR検証
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/verify.yml
+      - C/src/orewosabake/apps/**
+      - C/src/orewosabake/packages/**
+      - C/src/orewosabake/package.json
+      - C/src/orewosabake/package-lock.json
+      - C/src/orewosabake/.npmrc
+      - C/src/orewosabake/.nvmrc
+      - C/src/orewosabake/README.md
+      - C/src/orewosabake/ml/**
+      - C/src/orewosabake/data/**
+      - C/src/orewosabake/docs/**
+      - C/src/orewosabake/tests/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: 型・Python構文検査とWebビルド
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+        working-directory: C/src/orewosabake
+
+    steps:
+      - name: リポジトリを取得
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Node.jsを設定
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: C/src/orewosabake/.nvmrc
+          cache: npm
+          cache-dependency-path: C/src/orewosabake/package-lock.json
+
+      - name: 依存関係を復元
+        run: npm ci
+
+      - name: API・Web・Workerを型検査
+        run: |
+          npm run typecheck:api
+          npm run typecheck:web
+          npm run typecheck:worker
+
+      - name: 学習用Pythonコードの構文を確認
+        run: python3 -m py_compile ml/prepare_phone_capture.py ml/prepare_stage_capture.py ml/train_detector.py ml/train_stage_classifier.py
+
+      - name: Webをビルド
+        run: npm run build:web
