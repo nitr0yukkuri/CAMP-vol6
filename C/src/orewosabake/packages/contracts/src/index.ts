@@ -87,7 +87,7 @@ export const GuideImageAnalysisResponseSchema = GuideImageAnalysisFieldsSchema
   .superRefine(validateGuideImageAnalysisCertainty);
 export const GuideImageAnalysisResultSchema = GuideImageAnalysisFieldsSchema
   .omit({ model: true })
-  .superRefine(validateGuideImageAnalysisCertainty);();
+  .superRefine(validateGuideImageAnalysisCertainty);
 
 export const AdvanceGuideStepRequestSchema = z.object({
   stepId: z.string().min(1),
