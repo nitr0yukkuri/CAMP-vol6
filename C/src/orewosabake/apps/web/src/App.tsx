@@ -310,8 +310,8 @@ function FishMark() {
 
 function fishTeacherDialogue(step?: { id: string; title: string }) {
   if (!step) return "いっしょに確認しよう！";
-  if (step.id === "hamachi_scales") return "今はうろこ取りだね。尾から頭に向かって、ヒレの近くもチェックしよう！";
-  if (step.id === "tai_scales") return "今はうろこ取りだね。尾側から取って、ヒレの近くも見よう！";
+  if (step.id === "hamachi_scales") return "今はうろこ取りだね。尾から頭へ進めて、ヒレの近くは目でチェックしよう！";
+  if (step.id === "tai_scales") return "今はうろこ取りだね。尾側から取って、ヒレのきわは目で確認しよう！";
   if (step.id === "other_finfish_identify") return "まず魚の種類を確認しよう！迷ったらお店に聞いてね！";
   return "今は「" + step.title + "」だね。一緒に進めよう！";
 }
@@ -459,6 +459,7 @@ function App() {
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("idle");
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [cameraMessage, setCameraMessage] = useState("");
+  const [headTailDetectionRetryKey, setHeadTailDetectionRetryKey] = useState(0);
   const [captureSessionId, setCaptureSessionId] = useState(createCaptureSessionId);
   const [captureFishId, setCaptureFishId] = useState("fish-001");
   const [captureStage, setCaptureStage] = useState<CaptureStage>("unknown");
@@ -493,6 +494,7 @@ function App() {
     videoRef,
     (screen === "guide" || screen === "capture") && cameraStatus === "active" && cameraStream !== null,
     detectionFishId,
+    headTailDetectionRetryKey,
   );
   const latestObservationRef = useRef(headTailDetection.observation);
   latestObservationRef.current = headTailDetection.observation;
@@ -1368,6 +1370,12 @@ function App() {
       ? `検出: ${headTailDetection.observation.detections.map((detection) => `${detection.label === "head" ? "頭" : "尾"} ${Math.round(detection.score * 100)}%`).join(" · ")}`
       : "頭・尾を探しています。検出されないことだけでは、切除済みとは判断しません。"
     : headTailDetection.message;
+  const canRetryHeadTailDetection = screen === "guide"
+    && cameraStatus === "active"
+    && cameraStream !== null
+    && guideSessionMode === "worker"
+    && !guideSessionLoading
+    && (headTailDetection.status === "unavailable" || headTailDetection.status === "error");
   const guideDetectionStatus = (() => {
     if (cameraStatus === "denied" || cameraStatus === "unavailable" || cameraStatus === "error") return "カメラを確認してみてね";
     if (!cameraStream || cameraStatus !== "active") return "カメラを起動すると先生が案内するよ";
@@ -1375,7 +1383,8 @@ function App() {
     if (guideSessionLoading) return "手順を準備中だよ";
     if (headTailDetection.status === "loading") return "映像を確認する準備中だよ";
     if (headTailDetection.status === "paused") return "画面に戻ると確認を再開するよ";
-    if (headTailDetection.status === "unavailable" || headTailDetection.status === "error") return "映像を確認できないみたい。カメラを再起動してね";
+    if (headTailDetection.status === "unavailable") return "認識モデルを読み込めなかったよ。通信を確認して、認識だけ再試行しよう";
+    if (headTailDetection.status === "error") return "映像の認識でエラーが出たよ。カメラはそのままで、認識だけ再試行できるよ";
     if (headTailDetection.status === "active" && !headTailDetection.faceDetectionReady) return "人物チェックを準備できず、画像確認を止めているよ";
     if (geminiFaceBlocked) return "人の顔が映っているため、画像確認をスキップしたよ。魚と手元を映してね";
     if (geminiAnalysis.loading) return "今の手順を映像で確認中だよ";
@@ -1696,14 +1705,30 @@ function App() {
                   <div className="guide-fish-bubble" aria-live="polite">
                     <span className="guide-fish-bubble-copy">{fishTeacherDialogue(currentStep)}</span>
                     {guideDetectionStatus ? (
-                      <small
-                        className="guide-fish-bubble-status"
-                        data-state={guideDetectionStatusState}
-                        role="status"
-                        title={guideDetectionStatusState === "error" ? guideDetectionStatus : undefined}
-                      >
-                        {guideDetectionStatus}
-                      </small>
+                      <div className="guide-fish-bubble-feedback">
+                        <small
+                          className="guide-fish-bubble-status"
+                          data-state={guideDetectionStatusState}
+                          role="status"
+                        >
+                          {guideDetectionStatus}
+                        </small>
+                        {canRetryHeadTailDetection ? (
+                          <>
+                            <button
+                              className="guide-fish-recognition-retry"
+                              type="button"
+                              onClick={() => setHeadTailDetectionRetryKey((key) => key + 1)}
+                            >
+                              認識を再試行
+                            </button>
+                            <details className="guide-fish-recognition-details">
+                              <summary>エラーの詳細</summary>
+                              <code>{headTailDetection.message}</code>
+                            </details>
+                          </>
+                        ) : null}
+                      </div>
                     ) : null}
                   </div>
                   {selectedFishVisualData ? (

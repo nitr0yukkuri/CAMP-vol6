@@ -163,6 +163,7 @@ export function useHeadTailDetection(
   videoRef: RefObject<HTMLVideoElement | null>,
   enabled: boolean,
   fishId: GuideRequest["fishId"] | null,
+  retryKey = 0,
 ): HeadTailDetection & { checkFrameForFace: (bitmap: ImageBitmap) => Promise<boolean> } {
   const [detection, setDetection] = useState<HeadTailDetection>({
     status: "idle",
@@ -602,7 +603,7 @@ export function useHeadTailDetection(
       removeVisibilityListener?.();
       stopInference();
     };
-  }, [enabled, fishId, videoRef]);
+  }, [enabled, fishId, retryKey, videoRef]);
 
   return { ...detection, checkFrameForFace };
 }
