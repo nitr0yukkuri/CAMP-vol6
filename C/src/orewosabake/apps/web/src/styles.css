@@ -144,10 +144,10 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .guide-stage > .camera-card { aspect-ratio: 16 / 9; }
 .guide-fish-stage { display: flex; min-width: 0; min-height: 0; height: 100%; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
 .guide-fish-image { display: block; width: min(100%, 190px); min-height: 0; max-height: 68%; object-fit: contain; filter: drop-shadow(0 8px 10px rgba(0, 0, 0, .18)); }
-.guide-fish-bubble { position: relative; z-index: 2; width: min(100%, 230px); max-height: 40%; flex: 0 0 auto; overflow: hidden; padding: 8px 10px; border-radius: 14px; color: var(--deep); background: #fff; box-shadow: 0 3px 10px rgba(0, 0, 0, .12); text-align: center; }
+.guide-fish-bubble { position: relative; z-index: 2; width: min(100%, 230px); flex: 0 0 auto; padding: 8px 10px; border-radius: 14px; color: var(--deep); background: #fff; box-shadow: 0 3px 10px rgba(0, 0, 0, .12); text-align: center; }
 .guide-fish-bubble::after { position: absolute; bottom: -5px; left: 50%; width: 10px; height: 10px; background: #fff; content: ""; transform: translateX(-50%) rotate(45deg); }
 .guide-fish-bubble-copy { display: block; font-size: 10px; font-weight: 700; line-height: 1.35; }
-.guide-fish-bubble-status { display: block; max-height: min(18vh, 100px); overflow-y: auto; margin-top: 4px; color: var(--muted); font-size: 8px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; scrollbar-width: thin; }
+.guide-fish-bubble-status { display: block; max-height: min(18vh, 100px); overflow-y: auto; margin-top: 4px; color: var(--muted); font-size: 9px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; scrollbar-width: thin; }
 .guide-fish-bubble-status[data-state="error"], .guide-fish-bubble-status[data-state="unavailable"] { color: var(--action); }
 .guide-fish-bubble-status[data-state="loading"], .guide-fish-bubble-status[data-state="paused"] { color: var(--notice); }
 .guide-fish-bubble-status[data-state="observed"], .guide-fish-bubble-status[data-state="likely_complete"] { color: var(--success); }
@@ -394,9 +394,9 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
   .camera-card { min-height: 0; }
   .guide-fish-stage { gap: 5px; }
   .guide-fish-image { width: min(100%, 130px); max-height: 58%; }
-  .guide-fish-bubble { width: 100%; max-height: 44%; padding: 6px 7px; }
+  .guide-fish-bubble { width: 100%; padding: 6px 7px; }
   .guide-fish-bubble-copy { font-size: 9px; }
-  .guide-fish-bubble-status { max-height: min(14vh, 64px); font-size: 7px; }
+  .guide-fish-bubble-status { max-height: min(18vh, 72px); font-size: 8px; }
   .guide-panel { min-height: 66px; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) 142px; gap: 7px; padding: 6px 10px; }
   .guide-step h2 { font-size: 13px; }
   .guide-step p { font-size: 10px; }
