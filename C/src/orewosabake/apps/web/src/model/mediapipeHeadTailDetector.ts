@@ -1,18 +1,53 @@
 import {
+  FaceDetector,
   FilesetResolver,
   ImageClassifier,
   ObjectDetector,
+  type Detection,
   type ObjectDetectorResult,
 } from "@mediapipe/tasks-vision";
 import { ObservationSchema, type Observation } from "@orewosabake/contracts";
-import { parseFishStage } from "./fishStage";
+import { FISH_STAGE_LABELS, parseFishStage } from "./fishStage";
 
 const DEFAULT_MEDIAPIPE_WASM_PATH = "/mediapipe/wasm";
+const DEFAULT_FACE_MODEL_PATH = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
 const DETECTION_SCORE_THRESHOLD = 0.35;
 const DETECTION_MAX_RESULTS = 12;
+const NON_FISH_GATE_SCORE_THRESHOLD = 0.5;
+const FACE_DETECTION_MIN_CONFIDENCE = 0.5;
+const FACE_OVERLAP_COVERAGE_THRESHOLD = 0.35;
+const FACE_MODEL_DOWNLOAD_TIMEOUT_MS = 15_000;
+const MAX_FACE_MODEL_BYTES = 10 * 1024 * 1024;
 
 function clampRatio(value: number): number {
   return Math.min(1, Math.max(0, value));
+}
+
+type PixelBox = { x: number; y: number; width: number; height: number };
+
+function faceBoundingBoxes(detections: Detection[]): PixelBox[] {
+  return detections.flatMap((detection) => {
+    const box = detection.boundingBox;
+    const score = detection.categories[0]?.score ?? 0;
+    return box && score >= FACE_DETECTION_MIN_CONFIDENCE
+      ? [{ x: box.originX, y: box.originY, width: box.width, height: box.height }]
+      : [];
+  });
+}
+
+function overlapsFace(box: PixelBox, faces: PixelBox[]): boolean {
+  const area = box.width * box.height;
+  if (area <= 0) return false;
+  return faces.some((face) => {
+    const intersectionWidth = Math.max(0, Math.min(box.x + box.width, face.x + face.width) - Math.max(box.x, face.x));
+    const intersectionHeight = Math.max(0, Math.min(box.y + box.height, face.y + face.height) - Math.max(box.y, face.y));
+    const intersectionArea = intersectionWidth * intersectionHeight;
+    const faceArea = face.width * face.height;
+    return intersectionArea > 0 && (
+      intersectionArea / area >= FACE_OVERLAP_COVERAGE_THRESHOLD
+      || (faceArea > 0 && intersectionArea / faceArea >= FACE_OVERLAP_COVERAGE_THRESHOLD)
+    );
+  });
 }
 
 function toObservation(
@@ -20,13 +55,25 @@ function toObservation(
   width: number,
   height: number,
   capturedAt: string,
+  faces: PixelBox[] | null,
 ): Observation {
+  if (faces === null) {
+    return ObservationSchema.parse({ source: "mediapipe", capturedAt, detections: [] });
+  }
+  const nonFishSceneDetected = result.detections.some((detection) => {
+    const category = detection.categories[0];
+    return category?.categoryName?.toLowerCase() === "non_fish" && category.score >= NON_FISH_GATE_SCORE_THRESHOLD;
+  });
+  if (nonFishSceneDetected) {
+    return ObservationSchema.parse({ source: "mediapipe", capturedAt, detections: [] });
+  }
   const detections = result.detections.flatMap((detection) => {
     const category = detection.categories[0];
     const label = category?.categoryName?.toLowerCase();
     const box = detection.boundingBox;
 
-    if ((label !== "head" && label !== "tail") || !category || !box || width <= 0 || height <= 0) {
+    if ((label !== "head" && label !== "tail") || !category || !box || width <= 0 || height <= 0
+      || overlapsFace({ x: box.originX, y: box.originY, width: box.width, height: box.height }, faces)) {
       return [];
     }
 
@@ -58,15 +105,19 @@ export class MediaPipeFishInference {
   private lastTimestampMs = -1;
   private fishStageError: string | undefined;
   private fishStageStatus: "ready" | "unavailable" | "error";
+  private faceDetectionError: string | null;
 
   private constructor(
     private readonly detector: ObjectDetector,
+    private faceDetector: FaceDetector | null,
     private fishStageClassifier: ImageClassifier | null,
     fishStageStatus: "ready" | "unavailable" | "error",
     fishStageError?: string,
+    faceDetectionError: string | null = null,
   ) {
     this.fishStageStatus = fishStageStatus;
     this.fishStageError = fishStageError;
+    this.faceDetectionError = faceDetectionError;
   }
 
   get fishStagePredictionStatus(): "ready" | "unavailable" | "error" {
@@ -74,30 +125,82 @@ export class MediaPipeFishInference {
   }
 
   get fishStageStatusMessage(): string {
-    return this.fishStageError ?? "工程判定モデルを読み込みました。";
+    return this.fishStageError ?? "魚の状態判定モデルを読み込みました。";
+  }
+
+  get faceDetectionReady(): boolean {
+    return this.faceDetector !== null;
+  }
+
+  get faceDetectionStatusMessage(): string {
+    return this.faceDetectionError ?? "人物チェックモデルを読み込みました。";
   }
 
   static async create(
     modelPath = "/models/head-tail.tflite",
     wasmPath = DEFAULT_MEDIAPIPE_WASM_PATH,
     fishStageModelPath?: string,
+    faceModelPath = DEFAULT_FACE_MODEL_PATH,
   ): Promise<MediaPipeFishInference> {
-    // Module workers need MediaPipe's ES module WASM loader.
+    // This task is created inside an ES module Worker, so load the matching ESM WASM glue.
     const wasmFiles = await FilesetResolver.forVisionTasks(wasmPath, true);
-    const detector = await ObjectDetector.createFromOptions(wasmFiles, {
-      baseOptions: { modelAssetPath: modelPath },
-      runningMode: "VIDEO",
-      maxResults: DETECTION_MAX_RESULTS,
-      scoreThreshold: DETECTION_SCORE_THRESHOLD,
-      categoryAllowlist: ["head", "tail"],
-    });
+    const faceDetectorTask = (async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), FACE_MODEL_DOWNLOAD_TIMEOUT_MS);
+      let modelBuffer: Uint8Array;
+      try {
+        const response = await fetch(faceModelPath, { cache: "force-cache", signal: controller.signal });
+        if (!response.ok || response.headers.get("content-type")?.toLowerCase().includes("text/html")) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        modelBuffer = new Uint8Array(await response.arrayBuffer());
+      } finally {
+        clearTimeout(timeoutId);
+      }
+      const signature = new TextDecoder().decode(modelBuffer.subarray(4, 8));
+      if (modelBuffer.length < 8 || modelBuffer.length >= MAX_FACE_MODEL_BYTES || signature !== "TFL3") {
+        throw new Error("The downloaded face-check model is not a valid TFLite file.");
+      }
+      return FaceDetector.createFromOptions(wasmFiles, {
+        baseOptions: { modelAssetBuffer: modelBuffer },
+        runningMode: "VIDEO",
+        minDetectionConfidence: FACE_DETECTION_MIN_CONFIDENCE,
+      });
+    })();
+    const [detectorResult, faceDetectorResult] = await Promise.allSettled([
+      ObjectDetector.createFromOptions(wasmFiles, {
+        baseOptions: { modelAssetPath: modelPath },
+        runningMode: "VIDEO",
+        maxResults: DETECTION_MAX_RESULTS,
+        scoreThreshold: DETECTION_SCORE_THRESHOLD,
+        categoryAllowlist: ["head", "tail", "non_fish"],
+      }),
+      faceDetectorTask,
+    ]);
+    if (detectorResult.status === "rejected") {
+      if (faceDetectorResult.status === "fulfilled") faceDetectorResult.value.close();
+      throw detectorResult.reason;
+    }
+    const detector = detectorResult.value;
+    let faceDetector: FaceDetector | null = null;
+    let faceDetectionError: string | null = null;
+    if (faceDetectorResult.status === "fulfilled") {
+      faceDetector = faceDetectorResult.value;
+    } else {
+      const message = faceDetectorResult.reason instanceof Error
+        ? faceDetectorResult.reason.message
+        : String(faceDetectorResult.reason);
+      faceDetectionError = `人物チェックモデルを読み込めませんでした: ${message.replace(/\s+/g, " ").slice(0, 180)}`;
+    }
 
     if (!fishStageModelPath) {
       return new MediaPipeFishInference(
         detector,
+        faceDetector,
         null,
         "unavailable",
-        "工程判定モデルが未配置です。この魚の確認済み映像で学習するまで、工程の変化は検知しません。",
+        "魚の状態判定モデルが未配置です。この魚の確認済み映像で学習するまで、状態の変化は検知しません。",
+        faceDetectionError,
       );
     }
 
@@ -105,31 +208,66 @@ export class MediaPipeFishInference {
       const fishStageClassifier = await ImageClassifier.createFromOptions(wasmFiles, {
         baseOptions: { modelAssetPath: fishStageModelPath },
         runningMode: "VIDEO",
-        maxResults: 5,
+        maxResults: FISH_STAGE_LABELS.length,
       });
-      return new MediaPipeFishInference(detector, fishStageClassifier, "ready");
+      return new MediaPipeFishInference(detector, faceDetector, fishStageClassifier, "ready", undefined, faceDetectionError);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return new MediaPipeFishInference(
         detector,
+        faceDetector,
         null,
         "error",
-        `工程判定モデルを読み込めませんでした: ${message.replace(/\s+/g, " ").slice(0, 180)}`,
+        `魚の状態判定モデルを読み込めませんでした: ${message.replace(/\s+/g, " ").slice(0, 180)}`,
+        faceDetectionError,
       );
+    }
+  }
+
+  detectFacesInBitmap(bitmap: ImageBitmap, timestampMs: number): boolean {
+    if (!this.faceDetector) throw new Error(this.faceDetectionError ?? "人物チェックモデルを利用できません。");
+    const monotonicTimestamp = Math.max(timestampMs, this.lastTimestampMs + 1);
+    this.lastTimestampMs = monotonicTimestamp;
+    try {
+      return faceBoundingBoxes(this.faceDetector.detectForVideo(bitmap, monotonicTimestamp).detections).length > 0;
+    } catch (error) {
+      this.faceDetector.close();
+      this.faceDetector = null;
+      const message = error instanceof Error ? error.message : String(error);
+      this.faceDetectionError = `人物チェックに失敗しました: ${message.replace(/\s+/g, " ").slice(0, 180)}`;
+      throw new Error(this.faceDetectionError);
     }
   }
 
   detectBitmapFrame(bitmap: ImageBitmap, timestampMs: number, capturedAt: string): {
     observation: Observation;
+    faceDetectionReady: boolean;
+    faceDetectionMessage: string;
     fishStagePrediction: { label: string; score: number; capturedAt: string } | null;
     fishStageError?: string;
   } {
     const monotonicTimestamp = Math.max(timestampMs, this.lastTimestampMs + 1);
     const result = this.detector.detectForVideo(bitmap, monotonicTimestamp);
     this.lastTimestampMs = monotonicTimestamp;
-    const observation = toObservation(result, bitmap.width, bitmap.height, capturedAt);
+    let faces: PixelBox[] | null = null;
+    try {
+      if (this.faceDetector) faces = faceBoundingBoxes(this.faceDetector.detectForVideo(bitmap, monotonicTimestamp).detections);
+    } catch (error) {
+      this.faceDetector?.close();
+      this.faceDetector = null;
+      const message = error instanceof Error ? error.message : String(error);
+      this.faceDetectionError = `人物チェックに失敗しました: ${message.replace(/\s+/g, " ").slice(0, 180)}`;
+    }
+    const observation = toObservation(result, bitmap.width, bitmap.height, capturedAt, faces);
 
-    if (!this.fishStageClassifier) return { observation, fishStagePrediction: null };
+    if (!this.fishStageClassifier || !faces || faces.length > 0) {
+      return {
+        observation,
+        faceDetectionReady: this.faceDetector !== null,
+        faceDetectionMessage: this.faceDetectionStatusMessage,
+        fishStagePrediction: null,
+      };
+    }
     try {
       const classification = this.fishStageClassifier.classifyForVideo(bitmap, monotonicTimestamp);
       const categories = classification.classifications.flatMap((group) => group.categories);
@@ -141,22 +279,31 @@ export class MediaPipeFishInference {
       const score = best?.score;
       return {
         observation,
+        faceDetectionReady: this.faceDetector !== null,
+        faceDetectionMessage: this.faceDetectionStatusMessage,
         fishStagePrediction: stage && score !== undefined && Number.isFinite(score)
           ? { label: stage, score: clampRatio(score), capturedAt }
           : null,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.fishStageError = `工程判定に失敗しました: ${message.replace(/\s+/g, " ").slice(0, 180)}`;
+      this.fishStageError = `魚の状態判定に失敗しました: ${message.replace(/\s+/g, " ").slice(0, 180)}`;
       this.fishStageStatus = "error";
       this.fishStageClassifier.close();
       this.fishStageClassifier = null;
-      return { observation, fishStagePrediction: null, fishStageError: this.fishStageError };
+      return {
+        observation,
+        faceDetectionReady: this.faceDetector !== null,
+        faceDetectionMessage: this.faceDetectionStatusMessage,
+        fishStagePrediction: null,
+        fishStageError: this.fishStageError,
+      };
     }
   }
 
   close(): void {
     this.fishStageClassifier?.close();
+    this.faceDetector?.close();
     this.detector.close();
   }
 }
