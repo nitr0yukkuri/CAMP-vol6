@@ -592,6 +592,18 @@ function App() {
     setGeminiAnalysis({ loading: false });
   }, [currentStep?.id]);
 
+  useEffect(() => {
+    const previousWatch = geminiAutoDetectionWatch.current;
+    setGeminiAutoPending(false);
+    geminiAutoDetectionWatch.current = {
+      ...previousWatch,
+      pending: false,
+      retryCount: 0,
+      retryAtMs: 0,
+      pendingObservationAtMs: null,
+    };
+  }, [currentStep?.id]);
+
   function closeHelp() {
     setHelpOpen(false);
   }
