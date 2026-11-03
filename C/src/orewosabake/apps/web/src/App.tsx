@@ -300,12 +300,11 @@ function FishMark() {
 
 function fishTeacherDialogue(step?: { id: string; title: string }) {
   if (!step) return "いっしょに確認しよう！";
-  if (step.id === "hamachi_scales") return "よーし！うろこ取りだよ！体をぬらして、ヒレの近くもチェック！";
-  if (step.id === "tai_scales") return "よーし！うろこ取りだよ！尾側から取って、ヒレの近くも見てね！";
+  if (step.id === "hamachi_scales") return "今はうろこ取りだね。尾から頭に向かって、ヒレの近くもチェックしよう！";
+  if (step.id === "tai_scales") return "今はうろこ取りだね。尾側から取って、ヒレの近くも見よう！";
   if (step.id === "other_finfish_identify") return "まず魚の種類を確認しよう！迷ったらお店に聞いてね！";
-  return "いい調子！「" + step.title + "」に挑戦だよ！";
+  return "今は「" + step.title + "」だね。一緒に進めよう！";
 }
-
 function SearchIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1300,32 +1299,22 @@ function App() {
       : "頭・尾を探しています。検出されないことだけでは、切除済みとは判断しません。"
     : headTailDetection.message;
   const guideDetectionStatus = (() => {
-    if (cameraStatus === "denied" || cameraStatus === "unavailable" || cameraStatus === "error") return "カメラを使えないため自動確認は停止中";
-    if (!cameraStream || cameraStatus !== "active") return "カメラを起動すると自動で確認するよ";
-    if (guideSessionMode === "local") return "APIに接続できず自動確認は停止中";
-    if (guideSessionLoading) return "ガイドを準備中";
-    if (headTailDetection.status === "loading") return "認識モデルを準備中";
-    if (headTailDetection.status === "paused") return "画面が隠れている間は認識を一時停止";
-    if (headTailDetection.status === "unavailable" || headTailDetection.status === "error") return headTailDetection.message;
-    if (geminiAnalysis.loading) return "Geminiで映像を確認中";
-    if (geminiAnalysis.error) return "Gemini確認に失敗したよ";
+    if (cameraStatus === "denied" || cameraStatus === "unavailable" || cameraStatus === "error") return "カメラを確認してみてね";
+    if (!cameraStream || cameraStatus !== "active") return "カメラを起動すると先生が案内するよ";
+    if (guideSessionMode === "local") return "ガイドを準備できないみたい。通信を確認してね";
+    if (guideSessionLoading) return "手順を準備中だよ";
+    if (headTailDetection.status === "loading") return "映像を確認する準備中だよ";
+    if (headTailDetection.status === "paused") return "画面に戻ると確認を再開するよ";
+    if (headTailDetection.status === "unavailable" || headTailDetection.status === "error") return "映像を確認できないみたい。カメラを再起動してね";
+    if (geminiAnalysis.loading) return "今の手順を映像で確認中だよ";
+    if (geminiAnalysis.error) return "うまく確認できなかったよ。手順を見ながら進めてね";
     if (geminiAnalysis.result) {
       const assessment = geminiAnalysis.result.stepAssessment;
-      const label = assessment.status === "likely_complete"
-        ? "工程はできていそう"
-        : assessment.status === "in_progress"
-          ? "まだ途中みたい"
-          : "工程は映像だけでは不明";
-      const evidence = assessment.evidence.trim();
-      return `Gemini: ${label}${evidence ? ` — ${evidence.slice(0, 42)}` : ""}`;
+      if (assessment.status === "likely_complete") return "できていそう！手元も確認して次へ進もう";
+      if (assessment.status === "in_progress") return "もう少しだね。手元を見ながら進めよう";
+      return "映像だけでは分からないみたい。手元を確認してね";
     }
-    if (headTailDetection.observation?.detections.length) {
-      const labels = [...new Set(headTailDetection.observation.detections.map((detection) => detection.label))]
-        .map((label) => label === "head" ? "頭" : "尾");
-      return "MediaPipe: " + labels.join("・") + "を検知中";
-    }
-    if (headTailDetection.status === "active") return "MediaPipe: 頭・尾を探しているよ";
-    return "自動確認を準備中";
+    return "";
   })();
   const guideDetectionStatusState = geminiAnalysis.loading
     ? "loading"
@@ -1627,25 +1616,20 @@ function App() {
                       {cameraStatus !== "starting" ? <button type="button" onClick={() => void startCamera()}>カメラを起動</button> : null}
                     </div>
                   )}
-                  {headTailDetection.observation && videoRef.current && videoRef.current.videoWidth > 0 ? (
-                    <DetectionOverlay
-                      observation={headTailDetection.observation}
-                      width={videoRef.current.videoWidth}
-                      height={videoRef.current.videoHeight}
-                    />
-                  ) : null}
                 </section>
                 <aside className="guide-fish-stage" aria-label={`${chosenFish}先生`}>
                   <div className="guide-fish-bubble" aria-live="polite">
                     <span className="guide-fish-bubble-copy">{fishTeacherDialogue(currentStep)}</span>
-                    <small
-                      className="guide-fish-bubble-status"
-                      data-state={guideDetectionStatusState}
-                      role="status"
-                      title={guideDetectionStatusState === "error" ? guideDetectionStatus : undefined}
-                    >
-                      {guideDetectionStatus}
-                    </small>
+                    {guideDetectionStatus ? (
+                      <small
+                        className="guide-fish-bubble-status"
+                        data-state={guideDetectionStatusState}
+                        role="status"
+                        title={guideDetectionStatusState === "error" ? guideDetectionStatus : undefined}
+                      >
+                        {guideDetectionStatus}
+                      </small>
+                    ) : null}
                   </div>
                   {selectedFishVisualData ? (
                     <img
