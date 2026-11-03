@@ -70,6 +70,9 @@ type GeminiAutoDetectionWatch = {
   stableSignature: string | null;
   pending: boolean;
   lastTriggeredAt: number;
+  retryCount: number;
+  retryAtMs: number;
+  pendingObservationAtMs: number | null;
 };
 
 function createGeminiAutoDetectionWatch(): GeminiAutoDetectionWatch {
@@ -81,6 +84,9 @@ function createGeminiAutoDetectionWatch(): GeminiAutoDetectionWatch {
     stableSignature: null,
     pending: false,
     lastTriggeredAt: 0,
+    retryCount: 0,
+    retryAtMs: 0,
+    pendingObservationAtMs: null,
   };
 }
 
@@ -124,6 +130,7 @@ const GEMINI_AUTO_STABLE_OBSERVATIONS = 3;
 const GEMINI_AUTO_MAX_FRAME_GAP_MS = 2_500;
 const GEMINI_AUTO_MAX_OBSERVATION_AGE_MS = 2_000;
 const GEMINI_AUTO_MIN_INTERVAL_MS = 10_000;
+const GEMINI_AUTO_RETRY_DELAYS_MS = [15_000, 30_000, 60_000] as const;
 
 function createCaptureSessionId(): string {
   const now = new Date();
@@ -460,7 +467,7 @@ function App() {
   const guideRequestController = useRef<AbortController | null>(null);
   const guideAdvanceInFlight = useRef(false);
   const geminiAnalysisRequestId = useRef(0);
-  const geminiAutoAnalyzerRef = useRef<(() => Promise<void>) | null>(null);
+  const geminiAutoAnalyzerRef = useRef<(() => Promise<boolean>) | null>(null);
   const geminiAutoDetectionWatch = useRef<GeminiAutoDetectionWatch>(createGeminiAutoDetectionWatch());
   const detectionFishName = selectedFish === "その他" ? search.trim() || "ほかの魚" : selectedFish;
   const detectionFishId = screen === "guide" ? resolveGuideFishId(detectionFishName) ?? null : null;
@@ -583,6 +590,18 @@ function App() {
   useEffect(() => {
     geminiAnalysisRequestId.current += 1;
     setGeminiAnalysis({ loading: false });
+  }, [currentStep?.id]);
+
+  useEffect(() => {
+    const previousWatch = geminiAutoDetectionWatch.current;
+    setGeminiAutoPending(false);
+    geminiAutoDetectionWatch.current = {
+      ...previousWatch,
+      pending: false,
+      retryCount: 0,
+      retryAtMs: 0,
+      pendingObservationAtMs: null,
+    };
   }, [currentStep?.id]);
 
   function closeHelp() {
@@ -1078,34 +1097,49 @@ function App() {
     }
   }
 
-  async function analyzeCurrentCameraImage() {
-    if (geminiAnalysis.loading || guideAdvancing || guideSessionLoading) return;
+  async function analyzeCurrentCameraImage(isAutomatic = false): Promise<boolean> {
+    if (geminiAnalysis.loading || guideAdvancing || guideSessionLoading) return false;
     if (!guideSession || !currentStep || !selectedGuideFishId || !videoRef.current || cameraStatus !== "active") {
       setGeminiAnalysis({ loading: false, error: "カメラ映像と現在の工程を確認してください。" });
-      return;
+      return false;
     }
     const signal = guideRequestController.current?.signal;
     if (!signal || signal.aborted) {
       setGeminiAnalysis({ loading: false, error: "ガイドを開始し直してください。" });
-      return;
+      return false;
     }
     const requestId = ++geminiAnalysisRequestId.current;
     setGeminiAnalysis({ loading: true });
+    const frameCapturedAtMs = Date.now();
     try {
       const frame = await captureCurrentFrame(videoRef.current);
-      if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return;
+      if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return false;
       const imageData = await blobToDataUrl(frame.blob);
-      if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return;
+      if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return false;
       geminiAutoDetectionWatch.current.lastTriggeredAt = Date.now();
       const result = await analyzeGuideImage({ fishId: selectedGuideFishId, stepId: currentStep.id, imageData }, signal);
-      if (!signal.aborted && requestId === geminiAnalysisRequestId.current) setGeminiAnalysis({ loading: false, result });
+      if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return false;
+      setGeminiAnalysis({ loading: false, result });
+      if (!isAutomatic) {
+        const watch = geminiAutoDetectionWatch.current;
+        if (watch.pending && watch.pendingObservationAtMs !== null && watch.pendingObservationAtMs <= frameCapturedAtMs) {
+          watch.pending = false;
+          watch.pendingObservationAtMs = null;
+          watch.retryCount = 0;
+          watch.retryAtMs = 0;
+          setGeminiAutoPending(false);
+          setGeminiAutoCooldownTick((tick) => tick + 1);
+        }
+      }
+      return true;
     } catch (error) {
       if (!signal.aborted && requestId === geminiAnalysisRequestId.current) setGeminiAnalysis({ loading: false, error: error instanceof Error ? error.message : "画像をAIで確認できませんでした。" });
+      return false;
     }
   }
 
   useEffect(() => {
-    geminiAutoAnalyzerRef.current = analyzeCurrentCameraImage;
+    geminiAutoAnalyzerRef.current = () => analyzeCurrentCameraImage(true);
   });
 
   useEffect(() => {
@@ -1186,6 +1220,10 @@ function App() {
     watch.stableSignature = signature;
     if (previousStableSignature === null && signature === "") return;
 
+    if (watch.retryAtMs > 0) setGeminiAutoCooldownTick((tick) => tick + 1);
+    watch.retryCount = 0;
+    watch.retryAtMs = 0;
+    watch.pendingObservationAtMs = capturedAtMs;
     watch.pending = true;
     setGeminiAutoPending(true);
   }, [
@@ -1209,7 +1247,11 @@ function App() {
       || headTailDetection.status !== "active" || geminiAnalysis.loading || guideSessionLoading || guideAdvancing) return;
 
     const watch = geminiAutoDetectionWatch.current;
-    const cooldownRemaining = watch.lastTriggeredAt + GEMINI_AUTO_MIN_INTERVAL_MS - Date.now();
+    const nextEligibleAt = Math.max(
+      watch.lastTriggeredAt + GEMINI_AUTO_MIN_INTERVAL_MS,
+      watch.retryAtMs,
+    );
+    const cooldownRemaining = nextEligibleAt - Date.now();
     if (cooldownRemaining > 0) {
       const timerId = window.setTimeout(
         () => setGeminiAutoCooldownTick((tick) => tick + 1),
@@ -1220,8 +1262,34 @@ function App() {
 
     watch.pending = false;
     watch.lastTriggeredAt = Date.now();
+    watch.retryAtMs = 0;
     setGeminiAutoPending(false);
-    void geminiAutoAnalyzerRef.current?.();
+    void (async () => {
+      const succeeded = (await geminiAutoAnalyzerRef.current?.()) ?? false;
+      if (geminiAutoDetectionWatch.current !== watch) return;
+
+      if (succeeded) {
+        watch.retryCount = 0;
+        watch.retryAtMs = 0;
+        if (!watch.pending) watch.pendingObservationAtMs = null;
+        return;
+      }
+
+      // A newer stable detection is already queued; let it use the next eligible frame.
+      if (watch.pending) {
+        watch.retryCount = 0;
+        watch.retryAtMs = 0;
+        return;
+      }
+
+      const retryDelayMs = GEMINI_AUTO_RETRY_DELAYS_MS[watch.retryCount];
+      if (retryDelayMs === undefined) return;
+
+      watch.retryCount += 1;
+      watch.retryAtMs = Date.now() + retryDelayMs;
+      watch.pending = true;
+      setGeminiAutoPending(true);
+    })();
   }, [
     geminiAutoEnabled,
     geminiAutoPending,
