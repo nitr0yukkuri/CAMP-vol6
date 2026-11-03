@@ -1306,7 +1306,7 @@ function App() {
     if (guideSessionLoading) return "ガイドを準備中";
     if (headTailDetection.status === "loading") return "認識モデルを準備中";
     if (headTailDetection.status === "paused") return "画面が隠れている間は認識を一時停止";
-    if (headTailDetection.status === "unavailable" || headTailDetection.status === "error") return "認識モデルを起動できないみたい";
+    if (headTailDetection.status === "unavailable" || headTailDetection.status === "error") return headTailDetection.message;
     if (geminiAnalysis.loading) return "Geminiで映像を確認中";
     if (geminiAnalysis.error) return "Gemini確認に失敗したよ";
     if (geminiAnalysis.result) {
