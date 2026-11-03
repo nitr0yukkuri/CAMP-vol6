@@ -71,7 +71,7 @@ export default {
       }));
       if (!limitResponse.ok) return errorResponse(429, "GEMINI_RATE_LIMITED", "画像確認の回数が上限に達しました。1分ほど待ってから再試行してください。");
       try {
-        return json(await analyzeWithGemini(env, parsed.data.fishId, step.title, step.description, base64));
+        return json(await analyzeWithGemini(env, parsed.data.fishId, step.title, step.description, step.expectedState, base64));
       } catch (error) {
         if (error instanceof RequestError) return errorResponse(error.status, error.code, error.message);
         return errorResponse(502, "GEMINI_UPSTREAM_ERROR", "Gemini APIから応答を取得できませんでした。");
@@ -465,6 +465,7 @@ async function analyzeWithGemini(
   fishId: string,
   stepTitle: string,
   stepDescription: string,
+  stepExpectedState: string,
   imageBase64: string,
 ): Promise<GuideImageAnalysisResponse> {
   if (!env.GEMINI_API_KEY) {
@@ -481,12 +482,17 @@ async function analyzeWithGemini(
           { text: [
             "あなたは魚の調理工程を補助する画像確認役です。回答は日本語で、指定されたJSON形式だけにしてください。",
             "画像から直接見える事実だけを短く述べてください。魚種、鮮度、食用安全性、骨の完全な除去を保証してはいけません。",
-            "現在の工程が完了したか、次の工程へ進めるかを決めてはいけません。利用者の明示操作なしに工程を進めてはいけません。",
-            "不鮮明、隠れている、画角外など判断できない場合は certainty を uncertain にし、推測しないでください。",
+            "visiblePartsでは画像内にはっきり見える頭・体・尾だけを返してください。",
+            "stepAssessment.status は、この画像の見た目が現在の工程をどこまで示しているかを慎重に推定してください。",
+            "likely_complete は工程完了を示す明確な見た目の証拠がある場合だけ、in_progress は明確に未完了と分かる場合だけにしてください。それ以外は uncertain にしてください。",
+            "うろこ取りや小骨確認など、画像だけで作業結果を確かめられない工程は uncertain にしてください。期待状態のラベルだけから完了を推測してはいけません。",
+            "工程の完了や安全性を保証せず、次の工程へ進めてもいけません。進行は利用者が操作します。",
+            "不鮮明、隠れている、画角外など判断できない場合は certainty と stepAssessment.status の両方を uncertain にしてください。",
             `魚種ID: ${fishId}`,
             `確認中の工程: ${stepTitle}`,
             `表示中の参考ガイドの説明: ${stepDescription}`,
-            "visibleParts は画像内にはっきり見える head/body/tail だけを含めてください。evidence は画像上で見えることと工程説明との関係、caution は必要な場合の短い注意です。",
+            `この工程の目安状態: ${stepExpectedState}`,
+            "stepAssessment.evidence は工程の見た目について、画像で確認できた短い根拠を書いてください。evidence は見える部位の根拠、caution は必要な場合の短い注意です。",
           ].join("\n") },
           { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
         ] }],
@@ -497,11 +503,20 @@ async function analyzeWithGemini(
             properties: {
               certainty: { type: "STRING", enum: ["observed", "uncertain"] },
               visibleParts: { type: "ARRAY", items: { type: "STRING", enum: ["head", "body", "tail"] } },
+              stepAssessment: {
+                type: "OBJECT",
+                properties: {
+                  status: { type: "STRING", enum: ["likely_complete", "in_progress", "uncertain"] },
+                  evidence: { type: "STRING" },
+                },
+                required: ["status", "evidence"],
+                propertyOrdering: ["status", "evidence"],
+              },
               evidence: { type: "STRING" },
               caution: { type: "STRING" },
             },
-            required: ["certainty", "visibleParts", "evidence", "caution"],
-            propertyOrdering: ["certainty", "visibleParts", "evidence", "caution"],
+            required: ["certainty", "visibleParts", "stepAssessment", "evidence", "caution"],
+            propertyOrdering: ["certainty", "visibleParts", "stepAssessment", "evidence", "caution"],
           },
         },
       }),

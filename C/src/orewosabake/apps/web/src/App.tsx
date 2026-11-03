@@ -410,7 +410,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
           </li>
         </ol>
 
-        <p className="help-privacy-note">ガイド中、MediaPipeで頭・尾の検知状態が安定して変わると、圧縮した静止画をGoogle Geminiへ自動送信します。連続動画は送らず、画像はアプリに保存しません。Geminiの確認で工程が自動で進むことはありません。</p>
+        <p className="help-privacy-note">ガイド中、MediaPipeは約1秒ごとに頭・尾を確認し、安定した検知状態に応じて圧縮静止画をGoogle Geminiへ約10秒ごとに自動送信します。Geminiは工程の見た目を推定しますが、工程完了や安全性を保証せず、次の工程へ自動で進むこともありません。連続動画は送らず、画像はアプリに保存しません。</p>
         <footer className="help-dialog-footer">
           <button type="button" onClick={() => dialogRef.current?.close()}>OK</button>
         </footer>
@@ -1189,7 +1189,11 @@ function App() {
     watch.candidateCount = continuousCandidate ? watch.candidateCount + 1 : 1;
     watch.candidateCapturedAtMs = capturedAtMs;
 
-    if (watch.candidateCount < GEMINI_AUTO_STABLE_OBSERVATIONS || watch.stableSignature === signature) return;
+    if (watch.candidateCount < GEMINI_AUTO_STABLE_OBSERVATIONS) return;
+
+    const isNewStableState = watch.stableSignature !== signature;
+    const periodicCheckIsDue = now - watch.lastTriggeredAt >= GEMINI_AUTO_MIN_INTERVAL_MS;
+    if (!isNewStableState && !periodicCheckIsDue) return;
 
     watch.stableSignature = signature;
 
@@ -1306,10 +1310,14 @@ function App() {
     if (geminiAnalysis.loading) return "Geminiで映像を確認中";
     if (geminiAnalysis.error) return "Gemini確認に失敗したよ";
     if (geminiAnalysis.result) {
-      if (geminiAnalysis.result.certainty === "uncertain") return "Gemini: 映像だけでは判断できなかったよ";
-      const names = { head: "頭", body: "体", tail: "尾" };
-      const parts = geminiAnalysis.result.visibleParts.map((part) => names[part]);
-      return parts.length > 0 ? "Gemini: " + parts.join("・") + "が見えているよ" : "Gemini: 見える部位を確認できなかったよ";
+      const assessment = geminiAnalysis.result.stepAssessment;
+      const label = assessment.status === "likely_complete"
+        ? "工程はできていそう"
+        : assessment.status === "in_progress"
+          ? "まだ途中みたい"
+          : "工程は映像だけでは不明";
+      const evidence = assessment.evidence.trim();
+      return `Gemini: ${label}${evidence ? ` — ${evidence.slice(0, 42)}` : ""}`;
     }
     if (headTailDetection.observation?.detections.length) {
       const labels = [...new Set(headTailDetection.observation.detections.map((detection) => detection.label))]
@@ -1324,7 +1332,7 @@ function App() {
     : geminiAnalysis.error || headTailDetection.status === "error" || headTailDetection.status === "unavailable"
       ? "error"
       : geminiAnalysis.result
-        ? geminiAnalysis.result.certainty
+        ? geminiAnalysis.result.stepAssessment.status
         : headTailDetection.status;
   return (
     <main className={`app-root ${screen === "guide" ? "is-guide" : screen === "capture" ? "is-capture" : ""}`}>

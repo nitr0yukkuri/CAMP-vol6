@@ -148,7 +148,8 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .guide-fish-bubble-status { display: block; margin-top: 4px; color: var(--muted); font-size: 8px; font-weight: 600; line-height: 1.35; }
 .guide-fish-bubble-status[data-state="error"], .guide-fish-bubble-status[data-state="unavailable"] { color: var(--action); }
 .guide-fish-bubble-status[data-state="loading"], .guide-fish-bubble-status[data-state="paused"] { color: var(--notice); }
-.guide-fish-bubble-status[data-state="observed"] { color: var(--success); }
+.guide-fish-bubble-status[data-state="observed"], .guide-fish-bubble-status[data-state="likely_complete"] { color: var(--success); }
+.guide-fish-bubble-status[data-state="in_progress"] { color: var(--notice); }
 .camera-card { position: relative; display: flex; width: 100%; min-width: 0; min-height: 0; max-height: 100%; aspect-ratio: 558 / 206; flex-direction: column; justify-content: center; overflow: hidden; border-radius: 17px; color: var(--on-dark); background: #183d39; isolation: isolate; }
 .camera-card > video { position: absolute; z-index: -1; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .detection-overlay { position: absolute; z-index: 0; inset: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
