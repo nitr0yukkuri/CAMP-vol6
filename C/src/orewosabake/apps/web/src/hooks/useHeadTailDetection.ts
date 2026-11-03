@@ -180,6 +180,14 @@ export function useHeadTailDetection(
   const pendingFaceChecksRef = useRef(new Map<number, PendingFaceCheck>());
 
   const checkFrameForFace = useCallback((bitmap: ImageBitmap) => new Promise<boolean>((resolve, reject) => {
+    if (document.visibilityState !== "visible") {
+      bitmap.close();
+      const abortError = new Error("画面が非表示のため人物チェックを開始しませんでした。");
+      abortError.name = "AbortError";
+      reject(abortError);
+      return;
+    }
+
     const worker = workerRef.current;
     if (!worker || !workerReadyRef.current) {
       bitmap.close();
@@ -594,7 +602,7 @@ export function useHeadTailDetection(
         setDetection((current) => current.status === "active"
           ? { ...current, status: "paused", message: PAUSED_MESSAGE, observation: null, fishStage: { status: "paused", message: PAUSED_MESSAGE, stage: null, score: null, transition: lastStageTransition } }
           : current);
-        if (inferenceInFlight) {
+        if (inferenceInFlight || pendingFaceChecksRef.current.size > 0) {
           restartAfterVisibility = true;
           const abortError = new Error("画面が非表示になったため、人物チェックを中断しました。");
           abortError.name = "AbortError";
