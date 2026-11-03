@@ -298,6 +298,14 @@ function FishMark() {
   );
 }
 
+function fishTeacherDialogue(step?: { id: string; title: string }) {
+  if (!step) return "いっしょに確認しよう！";
+  if (step.id === "hamachi_scales") return "よーし！うろこ取りだよ！体をぬらして、ヒレの近くもチェック！";
+  if (step.id === "tai_scales") return "よーし！うろこ取りだよ！尾側から取って、ヒレの近くも見てね！";
+  if (step.id === "other_finfish_identify") return "まず魚の種類を確認しよう！迷ったらお店に聞いてね！";
+  return "いい調子！「" + step.title + "」に挑戦だよ！";
+}
+
 function SearchIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -421,7 +429,11 @@ function App() {
   const [guideSessionMode, setGuideSessionMode] = useState<GuideSessionMode>("worker");
   const [guideSessionLoading, setGuideSessionLoading] = useState(false);
   const [guideMessage, setGuideMessage] = useState("");
-  const [geminiAnalysis, setGeminiAnalysis] = useState<{ loading: boolean }>({ loading: false });
+  const [geminiAnalysis, setGeminiAnalysis] = useState<{
+    loading: boolean;
+    result?: GuideImageAnalysisResponse;
+    error?: boolean;
+  }>({ loading: false });
   const [geminiAutoPending, setGeminiAutoPending] = useState(false);
   const [geminiAutoCooldownTick, setGeminiAutoCooldownTick] = useState(0);
   const [pageVisible, setPageVisible] = useState(true);
@@ -1099,12 +1111,12 @@ function App() {
       const imageData = await blobToDataUrl(frame.blob);
       if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return false;
       geminiAutoDetectionWatch.current.lastTriggeredAt = Date.now();
-      await analyzeGuideImage({ fishId: selectedGuideFishId, stepId: currentStep.id, imageData }, signal);
+      const result = await analyzeGuideImage({ fishId: selectedGuideFishId, stepId: currentStep.id, imageData }, signal);
       if (signal.aborted || requestId !== geminiAnalysisRequestId.current) return false;
-      setGeminiAnalysis({ loading: false });
+      setGeminiAnalysis({ loading: false, result });
       return true;
     } catch {
-      if (!signal.aborted && requestId === geminiAnalysisRequestId.current) setGeminiAnalysis({ loading: false });
+      if (!signal.aborted && requestId === geminiAnalysisRequestId.current) setGeminiAnalysis({ loading: false, error: true });
       return false;
     }
   }
@@ -1164,7 +1176,7 @@ function App() {
       return;
     }
 
-    const signature = ["head", "tail"]
+    const signature = (currentStep?.id ?? "no-step") + ":" + ["head", "tail"]
       .filter((label) => observation.detections.some((detection) => detection.label === label))
       .join(",");
     const continuousCandidate = watch.candidateSignature === signature
@@ -1179,9 +1191,7 @@ function App() {
 
     if (watch.candidateCount < GEMINI_AUTO_STABLE_OBSERVATIONS || watch.stableSignature === signature) return;
 
-    const previousStableSignature = watch.stableSignature;
     watch.stableSignature = signature;
-    if (previousStableSignature === null && signature === "") return;
 
     if (watch.retryAtMs > 0) setGeminiAutoCooldownTick((tick) => tick + 1);
     watch.retryCount = 0;
@@ -1198,6 +1208,7 @@ function App() {
     guideSession?.status,
     guideSessionMode,
     guideIsComplete,
+    currentStep?.id,
     headTailDetection.status,
     headTailDetection.observation,
   ]);
@@ -1284,6 +1295,37 @@ function App() {
       ? `検出: ${headTailDetection.observation.detections.map((detection) => `${detection.label === "head" ? "頭" : "尾"} ${Math.round(detection.score * 100)}%`).join(" · ")}`
       : "頭・尾を探しています。検出されないことだけでは、切除済みとは判断しません。"
     : headTailDetection.message;
+  const guideDetectionStatus = (() => {
+    if (cameraStatus === "denied" || cameraStatus === "unavailable" || cameraStatus === "error") return "カメラを使えないため自動確認は停止中";
+    if (!cameraStream || cameraStatus !== "active") return "カメラを起動すると自動で確認するよ";
+    if (guideSessionMode === "local") return "APIに接続できず自動確認は停止中";
+    if (guideSessionLoading) return "ガイドを準備中";
+    if (headTailDetection.status === "loading") return "認識モデルを準備中";
+    if (headTailDetection.status === "paused") return "画面が隠れている間は認識を一時停止";
+    if (headTailDetection.status === "unavailable" || headTailDetection.status === "error") return "認識モデルを起動できないみたい";
+    if (geminiAnalysis.loading) return "Geminiで映像を確認中";
+    if (geminiAnalysis.error) return "Gemini確認に失敗したよ";
+    if (geminiAnalysis.result) {
+      if (geminiAnalysis.result.certainty === "uncertain") return "Gemini: 映像だけでは判断できなかったよ";
+      const names = { head: "頭", body: "体", tail: "尾" };
+      const parts = geminiAnalysis.result.visibleParts.map((part) => names[part]);
+      return parts.length > 0 ? "Gemini: " + parts.join("・") + "が見えているよ" : "Gemini: 見える部位を確認できなかったよ";
+    }
+    if (headTailDetection.observation?.detections.length) {
+      const labels = [...new Set(headTailDetection.observation.detections.map((detection) => detection.label))]
+        .map((label) => label === "head" ? "頭" : "尾");
+      return "MediaPipe: " + labels.join("・") + "を検知中";
+    }
+    if (headTailDetection.status === "active") return "MediaPipe: 頭・尾を探しているよ";
+    return "自動確認を準備中";
+  })();
+  const guideDetectionStatusState = geminiAnalysis.loading
+    ? "loading"
+    : geminiAnalysis.error || headTailDetection.status === "error" || headTailDetection.status === "unavailable"
+      ? "error"
+      : geminiAnalysis.result
+        ? geminiAnalysis.result.certainty
+        : headTailDetection.status;
   return (
     <main className={`app-root ${screen === "guide" ? "is-guide" : screen === "capture" ? "is-capture" : ""}`}>
       {screen === "select" ? (
@@ -1571,6 +1613,10 @@ function App() {
               <div className="guide-stage">
                 <section className="camera-card" aria-label="カメラプレビュー">
                   <div className="camera-topline"><span>カメラプレビュー</span></div>
+                  <div className="guide-fish-bubble" aria-live="polite">
+                    <span className="guide-fish-bubble-copy">{fishTeacherDialogue(currentStep)}</span>
+                    <small className="guide-fish-bubble-status" data-state={guideDetectionStatusState} role="status">{guideDetectionStatus}</small>
+                  </div>
                   {cameraStream ? (
                     <video ref={videoRef} autoPlay muted playsInline aria-label="カメラ映像" />
                   ) : (
