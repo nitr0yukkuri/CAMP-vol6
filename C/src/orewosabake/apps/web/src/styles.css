@@ -457,3 +457,31 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
   .help-dialog-card { animation-duration: .01ms !important; }
 }
+
+
+.capture-mask-details { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
+.capture-mask-details > summary { padding: 9px 12px; color: var(--teal); font-size: 12px; font-weight: 800; cursor: pointer; }
+.capture-mask-details[open] { padding: 0 10px 10px; }
+.capture-mask-details[open] > summary { padding-left: 2px; }
+.fish-mask-editor { display: grid; gap: 10px; color: var(--ink); font-size: 12px; }
+.fish-mask-heading strong { font-size: 13px; }
+.fish-mask-heading p, .fish-mask-message { margin: 4px 0 0; color: var(--muted); line-height: 1.55; }
+.fish-mask-tools, .fish-mask-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.fish-mask-tools button, .fish-mask-actions button, .fish-mask-start { min-height: 36px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--ink); background: var(--card); font-size: 11px; font-weight: 750; cursor: pointer; }
+.fish-mask-tools button.is-active, .fish-mask-actions button.is-primary, .fish-mask-start { border-color: var(--deep); color: var(--on-dark); background: var(--deep); }
+.fish-mask-tools button:disabled, .fish-mask-actions button:disabled { opacity: .48; cursor: not-allowed; }
+.fish-mask-workspace { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.fish-mask-workspace figure { min-width: 0; margin: 0; }
+.fish-mask-workspace figcaption { margin-bottom: 5px; color: var(--muted); font-size: 10px; font-weight: 750; }
+.fish-mask-workspace figure img { display: block; width: 100%; max-height: 42dvh; object-fit: contain; border-radius: 8px; background: #18251f; }
+.fish-mask-workspace figure img.is-selectable { cursor: crosshair; touch-action: none; }
+.fish-mask-result img { background-color: #fff; background-image: linear-gradient(45deg, #d9ded8 25%, transparent 25%), linear-gradient(-45deg, #d9ded8 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #d9ded8 75%), linear-gradient(-45deg, transparent 75%, #d9ded8 75%); background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0; }
+.fish-mask-empty { display: grid; min-height: 110px; place-items: center; border: 1px dashed var(--line-strong); border-radius: 8px; color: var(--muted); background: var(--card); text-align: center; }
+.fish-mask-confirm { display: flex; align-items: start; gap: 7px; line-height: 1.5; }
+.fish-mask-confirm input { flex: 0 0 auto; margin-top: 3px; accent-color: var(--deep); }
+.fish-mask-actions { justify-content: space-between; }
+@media (max-width: 680px) {
+  .fish-mask-workspace { grid-template-columns: minmax(0, 1fr); }
+  .fish-mask-workspace figure img { max-height: 32dvh; }
+  .fish-mask-actions { display: grid; grid-template-columns: 1fr; }
+}

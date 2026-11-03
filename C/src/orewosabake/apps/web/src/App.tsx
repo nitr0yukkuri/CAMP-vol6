@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { AdvanceGuideStepRequestSchema, getPreparationIdForFish, getReferenceGuide, GuideImageAnalysisResponseSchema, GuideRequestSchema, GuideSessionSchema, resolveGuideFishId, type GuideImageAnalysisResponse, type GuideRequest, type GuideSession, type Observation } from "@orewosabake/contracts";
 import { useHeadTailDetection, type HeadTailDetectionStatus } from "./hooks/useHeadTailDetection";
+import { FishBackgroundMaskEditor } from "./FishBackgroundMaskEditor";
 import { fishStageLabel, stageToExpectedFishState } from "./model/fishStage";
 
 type Category = "よく使う" | "海水魚" | "淡水魚" | "甲殻類";
@@ -1645,6 +1646,20 @@ function App() {
                     {pendingCapture.draftBox ? <rect className={`capture-box-draft is-${pendingCapture.activePart}`} x={pendingCapture.draftBox.x * pendingCapture.width} y={pendingCapture.draftBox.y * pendingCapture.height} width={pendingCapture.draftBox.width * pendingCapture.width} height={pendingCapture.draftBox.height * pendingCapture.height} /> : null}
                   </svg>}
                 </div>
+                <details className="capture-mask-details">
+                  <summary>背景を透過したPNGも別保存（任意）</summary>
+                  <FishBackgroundMaskEditor
+                    key={pendingCapture.row.frame_id}
+                    sourceBlob={pendingCapture.blob}
+                    sourceUrl={pendingCapture.previewUrl}
+                    width={pendingCapture.width}
+                    height={pendingCapture.height}
+                    onExport={(blob) => downloadCaptureFile(
+                      blob,
+                      pendingCapture.row.frame_path.replace(/\.jpe?g$/i, "_transparent.png"),
+                    )}
+                  />
+                </details>
                 <label className="capture-annotation-confirm"><input type="checkbox" checked={captureLabelsConfirmed} onChange={(event) => setCaptureLabelsConfirmed(event.currentTarget.checked)} />{pendingCapture.kind === "stage" ? "画像と選択した工程ラベルが一致している" : "この画像を見て、工程・頭尾の状態ラベルを確認した（AI候補を採用する場合も人が確認）"}</label>
                 <footer className="capture-annotation-actions">
                   <button type="button" onClick={() => {
