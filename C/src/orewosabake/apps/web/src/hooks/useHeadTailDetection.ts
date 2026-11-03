@@ -35,6 +35,8 @@ const FISH_STAGE_TRANSITION_NOTICE_MS = 30_000;
 const MEDIAPIPE_RUNTIME_ASSETS = [
   `${WASM_PATH}/vision_wasm_internal.js`,
   `${WASM_PATH}/vision_wasm_internal.wasm`,
+  `${WASM_PATH}/vision_wasm_module_internal.js`,
+  `${WASM_PATH}/vision_wasm_module_internal.wasm`,
   `${WASM_PATH}/vision_wasm_nosimd_internal.js`,
   `${WASM_PATH}/vision_wasm_nosimd_internal.wasm`,
 ];
