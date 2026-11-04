@@ -535,11 +535,11 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
           </li>
           <li>
             <span>3</span>
-            <div><strong>手順を確認して進む</strong><p>カメラを許可して手順を確認。AIが対象の工程を「できていそう」と判定すると、自動で次へ進みます。手元も確認しながら進めてください。</p></div>
+            <div><strong>手順を確認して進む</strong><p>ガイドを始めると、対応ブラウザーではマイクで「次へ」を聞き取り、工程を進められます。AIが対象の工程を「できていそう」と判定した場合も自動で次へ進みます。手元も確認しながら進めてください。</p></div>
           </li>
         </ol>
 
-        <p className="help-privacy-note">ガイド中の映像はMediaPipeで端末内処理します。頭・尾の検知が3回続けて安定した後、送信前に人物チェックを行い、顔を検知した場合や人物チェックを利用できない場合はGeminiへ送りません。顔の見逃しを完全に防ぐものではありません。チェックを通過したサーモンの画像は工程開始時と現在の圧縮静止画をGoogle Geminiへ自動送信します。連続動画は送らず、画像はアプリに保存しません。対象工程はGeminiが「できていそう」と判定すると自動で次へ進みます。うろこや骨など人の確認が必要な工程は、画面の「次の工程へ」を押してください。音声操作は開始ボタンを押している間だけマイクで「次へ」を聞きます。ブラウザの音声認識を使い、ブラウザによっては音声が外部の認識サービスへ送信されます。アプリは音声を保存しません。試作機能のため、魚と手元を確認してください。</p>
+        <p className="help-privacy-note">ガイド中の映像はMediaPipeで端末内処理します。頭・尾の検知が3回続けて安定した後、送信前に人物チェックを行い、顔を検知した場合や人物チェックを利用できない場合はGeminiへ送りません。顔の見逃しを完全に防ぐものではありません。チェックを通過したサーモンの画像は工程開始時と現在の圧縮静止画をGoogle Geminiへ自動送信します。連続動画は送らず、画像はアプリに保存しません。対象工程はGeminiが「できていそう」と判定すると自動で次へ進みます。うろこや骨など人の確認が必要な工程は、画面の「次の工程へ」を押してください。ガイドを始めると、対応ブラウザーではマイクで「次へ」を自動で聞き取ります。ブラウザーによって音声が外部の認識サービスへ送られる場合があります。認識した「次へ」は工程を進めるリクエストに含まれますが、音声自体をアプリに保存しません。ガイドを閉じるとマイクを停止します。音声を使えない場合は画面の「次の工程へ」を押してください。試作機能のため、魚と手元を確認してください。</p>
         <footer className="help-dialog-footer">
           <button type="button" onClick={() => dialogRef.current?.close()}>OK</button>
         </footer>
@@ -601,13 +601,10 @@ function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const voiceRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const voiceCommandEnabledRef = useRef(false);
+  const voiceCommandAutoStartRef = useRef(false);
   const voiceRestartTimerRef = useRef<number | null>(null);
   const lastVoiceAdvanceAtRef = useRef(0);
   const advanceVoiceStepRef = useRef<(() => void) | null>(null);
-  const speechRecognitionConstructor = getSpeechRecognitionConstructor();
-  const voiceCommandsSupported = typeof window !== "undefined"
-    && window.isSecureContext
-    && speechRecognitionConstructor !== undefined;
   const captureStartedAt = useRef<number | null>(null);
   const cameraRequestId = useRef(0);
   const guideRequestController = useRef<AbortController | null>(null);
@@ -775,6 +772,8 @@ function App() {
   }
 
   function startGuide() {
+    voiceCommandAutoStartRef.current = Boolean(selectedGuideFishId);
+    if (voiceCommandAutoStartRef.current) startVoiceCommands();
     setScreen("guide");
     setActiveStep(0);
     setGuideSession(null);
@@ -1441,14 +1440,6 @@ function App() {
     }
   }
 
-  function toggleVoiceCommands() {
-    if (voiceCommandEnabledRef.current) {
-      stopVoiceCommands("音声操作を停止しました");
-    } else {
-      startVoiceCommands();
-    }
-  }
-
   advanceVoiceStepRef.current = () => {
     if (screen !== "guide" || !guideSession || guideSession.status === "completed"
       || guideSessionLoading || guideAdvancing || !currentStep) {
@@ -1459,11 +1450,21 @@ function App() {
   };
 
   useEffect(() => {
-    if (screen === "guide" && guideSession?.status === "active" && pageVisible) return;
-    if (voiceCommandEnabledRef.current) {
-      stopVoiceCommands(pageVisible ? "音声操作を停止しました" : "画面を離れたため音声操作を停止しました");
+    const guideCanUseVoice = screen === "guide"
+      && (guideSessionLoading || guideSession?.status === "active");
+    if (!guideCanUseVoice) voiceCommandAutoStartRef.current = false;
+
+    if (!guideCanUseVoice || !pageVisible) {
+      if (voiceCommandEnabledRef.current) {
+        stopVoiceCommands(pageVisible ? "音声操作を停止しました" : "画面を離れたため音声操作を停止しました");
+      }
+      return;
     }
-  }, [screen, guideSession?.sessionId, guideSession?.status, pageVisible]);
+
+    if (voiceCommandAutoStartRef.current && !voiceCommandEnabledRef.current && voiceCommandStatus !== "error") {
+      startVoiceCommands();
+    }
+  }, [screen, guideSession?.sessionId, guideSession?.status, guideSessionLoading, pageVisible, voiceCommandStatus]);
 
   useEffect(() => () => {
     voiceCommandEnabledRef.current = false;
@@ -2277,15 +2278,22 @@ function App() {
                 <aside className="guide-fish-stage" aria-label={`${chosenFish}先生`}>
                   <div className="guide-fish-bubble" aria-live="polite">
                     <span className="guide-fish-bubble-copy">{fishTeacherDialogue(currentStep)}</span>
-                    {guideDetectionStatus ? (
+                    {guideDetectionStatus || voiceCommandStatus === "error" ? (
                       <div className="guide-fish-bubble-feedback">
-                        <small
-                          className="guide-fish-bubble-status"
-                          data-state={guideDetectionStatusState}
-                          role="status"
-                        >
-                          {guideDetectionStatus}
-                        </small>
+                        {guideDetectionStatus ? (
+                          <small
+                            className="guide-fish-bubble-status"
+                            data-state={guideDetectionStatusState}
+                            role="status"
+                          >
+                            {guideDetectionStatus}
+                          </small>
+                        ) : null}
+                        {voiceCommandStatus === "error" ? (
+                          <small className="guide-fish-bubble-status" data-state="error" role="status">
+                            {voiceCommandMessage || "音声を使えないよ。画面の「次の工程へ」で進めてね"}
+                          </small>
+                        ) : null}
                         {canRetryHeadTailDetection ? (
                           <>
                             <button
@@ -2341,24 +2349,7 @@ function App() {
                       <button type="button" onClick={() => { setActiveStep((step) => Math.max(0, step - 1)); setGuideMessage(""); }} disabled={!guideSession || activeStep === 0}>戻る</button>
                       <button type="button" onClick={() => void advanceStep()} disabled={!guideSession || guideSessionLoading || guideAdvancing || (isLastGuideStep && guideIsComplete)}>{guideSessionLoading ? "準備中…" : guideAdvancing ? "更新中…" : isLastGuideStep ? "ガイドを完了" : "次の工程へ"} <span>→</span></button>
                     </div>
-                    <div className="guide-voice-controls">
-                      <button
-                        type="button"
-                        className="guide-voice-toggle"
-                        onClick={toggleVoiceCommands}
-                        disabled={!guideSession || guideSessionLoading || !voiceCommandsSupported}
-                        aria-pressed={voiceCommandStatus === "starting" || voiceCommandStatus === "listening"}
-                      >
-                        {voiceCommandStatus === "starting" || voiceCommandStatus === "listening" ? "音声操作を停止" : "声で「次へ」"}
-                      </button>
-                      <span className="guide-voice-status" role="status" aria-live="polite">
-                        {voiceCommandMessage || (voiceCommandsSupported
-                          ? "開始して「次へ」と話してね"
-                          : typeof window !== "undefined" && !window.isSecureContext
-                            ? "HTTPS接続で使えます。画面のボタンで進めてね"
-                            : "このブラウザは音声入力に非対応です。画面のボタンで進めてね")}
-                      </span>
-                    </div>
+
                   </div>
                 ) : null}
               </aside>
