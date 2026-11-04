@@ -196,12 +196,42 @@ const GEMINI_AUTO_MAX_OBSERVATION_AGE_MS = 2_000;
 const GEMINI_AUTO_MIN_INTERVAL_MS = 10_000;
 const GEMINI_AUTO_RETRY_DELAYS_MS = [15_000, 30_000, 60_000] as const;
 const GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS = 3;
-const SALMON_AUTO_ADVANCE_STEP_IDS = new Set([
-  "salmon_guts",
-  "salmon_head",
-  "salmon_first_side",
-  "salmon_second_side",
+const MANUAL_CONFIRMATION_STEP_IDS = new Set([
+  "maguro_portion", "maguro_wipe", "maguro_check",
+  "salmon_scale", "salmon_bones",
+  "hamachi_scales", "hamachi_gills", "hamachi_check",
+  "aji_zeigo", "aji_trim",
+  "saba_bones",
+  "tai_scales", "tai_gills", "tai_trim",
+  "ebi_thaw", "ebi_vein", "ebi_wash",
+  "kani_cooked", "kani_shell", "kani_legs",
+  "ika_separate", "ika_open", "ika_arms", "ika_check",
+  "tako_prepared", "tako_head", "tako_beak", "tako_clean",
+  "iwashi_clean", "iwashi_bone", "iwashi_finish",
+  "buri_scale", "buri_wash", "buri_check",
+  "katsuo_scale", "katsuo_wash", "katsuo_check",
+  "hirame_clean", "hirame_clean_belly", "hirame_check",
+  "karei_scale", "karei_check",
+  "unagi_prepared", "unagi_rinse", "unagi_bone",
+  "anago_prepared", "anago_check", "anago_bone",
+  "hamo_shop", "hamo_check", "hamo_cook",
+  "tachiuo_clean", "tachiuo_check",
+  "kawahagi_spines", "kawahagi_guts", "kawahagi_check",
+  "ayu_check", "ayu_clean", "ayu_skewer",
+  "other_finfish_identify", "other_finfish_scales", "other_finfish_gills",
+  "other_finfish_guts", "other_finfish_head", "other_finfish_belly_cut",
+  "other_finfish_back_cut", "other_finfish_first_side", "other_finfish_second_side",
+  "other_finfish_check",
 ]);
+
+function canAutoAdvanceGuideStep(
+  fishId: GuideRequest["fishId"] | undefined,
+  stepId: string | undefined,
+  expectedState: GuideSession["guide"]["steps"][number]["expectedState"] | undefined,
+): boolean {
+  if (!fishId || !stepId || !expectedState || expectedState === "unknown") return false;
+  return !MANUAL_CONFIRMATION_STEP_IDS.has(stepId);
+}
 
 function fishStateLabel(state: NonNullable<GuideImageAnalysisResponse["fishStateAssessment"]>["state"]): string {
   switch (state) {
@@ -492,7 +522,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
             ×
           </button>
         </header>
-        <p className="help-dialog-lead">魚を選び、カメラの横で手順を確認しながら、自分で進めます。</p>
+        <p className="help-dialog-lead">魚を選び、カメラ映像を参考に手順を進めます。魚と手元も確認してください。</p>
 
         <ol className="help-flow">
           <li>
@@ -505,7 +535,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
           </li>
           <li>
             <span>3</span>
-            <div><strong>手順を確認して進む</strong><p>カメラを許可して手順を確認。内容を確かめたら「次の工程へ」を押します。閉じると最初からです。</p></div>
+            <div><strong>手順を確認して進む</strong><p>カメラを許可して手順を確認。AIが完了を3回続けて判定すると、対象の工程は自動で次へ進みます。手元も確認しながら進めてください。</p></div>
           </li>
         </ol>
 
@@ -1183,9 +1213,13 @@ function App() {
       const liveSignature = geminiObservationSignature(currentStep?.id ?? "", observation);
       if (!candidate
         || !analysisContext
-        || selectedGuideFishId !== "salmon"
         || !currentStep
-        || !SALMON_AUTO_ADVANCE_STEP_IDS.has(currentStep.id)
+        || !canAutoAdvanceGuideStep(selectedGuideFishId, currentStep.id, currentStep.expectedState)
+        || (selectedGuideFishId === "salmon" && (
+          geminiStepBaseline.current?.sessionId !== guideSession.sessionId
+          || geminiStepBaseline.current?.stepId !== currentStep.id
+          || geminiStepBaseline.current?.stream !== cameraStream
+        ))
         || activeStep !== guideSession.currentStepIndex
         || guideSession.currentStep?.id !== currentStep.id
         || guideSessionMode !== "worker"
@@ -1204,7 +1238,7 @@ function App() {
         || candidate.stepId !== currentStep.id
         || candidate.count < GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS
         || geminiAnalysis.result?.certainty !== "observed"
-        || geminiAnalysis.result.fishStateAssessment?.state !== currentStep.expectedState
+        || (selectedGuideFishId === "salmon" && geminiAnalysis.result.fishStateAssessment?.state !== currentStep.expectedState)
         || geminiAnalysis.result.stepAssessment.status !== "likely_complete") return;
       geminiAutoAdvanceCandidate.current = null;
       setGeminiAutoAdvanceCount(0);
@@ -1728,9 +1762,8 @@ function App() {
     const observation = latestObservationRef.current;
     const liveSignature = geminiObservationSignature(currentStep?.id ?? "", observation);
     const baseline = geminiStepBaseline.current;
-    const canCountConfirmation = selectedGuideFishId === "salmon"
-      && currentStep !== undefined
-      && SALMON_AUTO_ADVANCE_STEP_IDS.has(currentStep.id)
+    const canCountConfirmation = currentStep !== undefined
+      && canAutoAdvanceGuideStep(selectedGuideFishId, currentStep.id, currentStep.expectedState)
       && activeStep === guideSession?.currentStepIndex
       && guideSession?.currentStep?.id === currentStep.id
       && guideSessionMode === "worker"
@@ -1743,14 +1776,16 @@ function App() {
       && context.stream === cameraStream
       && context.signature === liveSignature
       && geminiAutoDetectionWatch.current.stableSignature === context.signature
-      && baseline?.sessionId === context.sessionId
-      && baseline.stepId === context.stepId
-      && baseline.stream === context.stream
+      && (selectedGuideFishId !== "salmon" || (
+        baseline?.sessionId === context.sessionId
+        && baseline.stepId === context.stepId
+        && baseline.stream === context.stream
+      ))
       && headTailDetection.status === "active"
       && headTailDetection.faceDetectionReady
       && hasFreshHeadTailObservation(observation)
       && result.certainty === "observed"
-      && result.fishStateAssessment?.state === currentStep.expectedState
+      && (selectedGuideFishId !== "salmon" || result.fishStateAssessment?.state === currentStep.expectedState)
       && result.stepAssessment.status === "likely_complete";
 
     if (!canCountConfirmation || !currentStep || !guideSession) {
@@ -1893,7 +1928,7 @@ function App() {
         return `魚体の状態：${fishState}\n工程：映像だけでは分からないみたい。手元を確認してね`;
       }
       if (currentAnalysis.stepAssessment.status === "likely_complete") {
-        return `魚体の状態：${fishState}\n工程：できていそう！自動確認 ${geminiAutoAdvanceCount}/${GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS}`;
+        return `魚体の状態：${fishState}\n工程：できていそう！自動で次へ進むよ（${geminiAutoAdvanceCount}/${GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS}）`;
       }
       if (currentAnalysis.stepAssessment.status === "in_progress") {
         return `魚体の状態：${fishState}\n工程：もう少しだね。手元を見ながら進めよう`;
@@ -1906,7 +1941,12 @@ function App() {
     if (currentAnalysis) {
       const assessment = currentAnalysis.stepAssessment;
       if (currentAnalysis.certainty === "uncertain") return "映像だけでは分からないみたい。手元を確認してね";
-      if (assessment.status === "likely_complete") return "できていそう！手元も確認して次へ進もう";
+      if (assessment.status === "likely_complete") {
+        if (canAutoAdvanceGuideStep(selectedGuideFishId, currentStep?.id, currentStep?.expectedState)) {
+          return `できていそう！自動で次へ進むよ（${geminiAutoAdvanceCount}/${GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS}）`;
+        }
+        return "できていそう！手元を確認してから進んでね";
+      }
       if (assessment.status === "in_progress") return "もう少しだね。手元を見ながら進めよう";
       return "映像だけでは分からないみたい。手元を確認してね";
     }
@@ -1922,7 +1962,7 @@ function App() {
     : currentAnalysis
         ? (currentAnalysis.certainty === "uncertain"
           || currentAnalysis.fishStateAssessment?.state === "unknown"
-          || (selectedGuideFishId === "salmon" && !SALMON_AUTO_ADVANCE_STEP_IDS.has(currentStep?.id ?? ""))
+          || !canAutoAdvanceGuideStep(selectedGuideFishId, currentStep?.id, currentStep?.expectedState)
           ? "uncertain"
           : currentAnalysis.stepAssessment.status)
         : headTailDetection.status;

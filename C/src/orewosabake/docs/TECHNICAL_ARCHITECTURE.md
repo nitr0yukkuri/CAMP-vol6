@@ -29,7 +29,8 @@
 - 送信直前にFaceDetector（BlazeFace）で静止画を確認する。顔を検知した場合、モデルを読み込めない場合、チェックに失敗した場合は画像をGeminiへ送らない。顔検知の見逃しを完全に防ぐ保証ではない。
 - ブラウザーはカメラの静止画1枚を `POST /api/guide/analyze` へ送る。Workerは共有契約、画像サイズ、クライアント別の短時間制限を確認し、Geminiへ転送する。APIキーはWorker Secretに置く。Durable Objectには全利用者共通のUTC日次上限（既定500回）もある。
 - 一時的なネットワーク障害や上流429/5xxは最大2回まで試行する。上流クォータ・認証エラーや回答スキーマ不正は再試行しない。再試行はローカルの偽Gemini APIで検証しており、実Google APIの負荷試験ではない。
-- 既定モデル名は `gemini-3.5-flash-lite`（`GEMINI_MODEL` で変更可能）。結果の `certainty: uncertain` は共有契約とUIで不確実として表示する。Geminiは工程完了や安全性を保証せず、ガイドを自動で次へ進めない。連続動画は送らない。
+- 対象工程では、`certainty: observed` と `stepAssessment.status: likely_complete` が同じ工程で3回連続し、画面・カメラ・セッションが有効なときだけ自動で1工程進む。期待状態が `unknown` の工程、うろこ・骨の確認、解凍・加熱など人の確認が必要な工程、その他の魚の汎用ガイドは手動のまま。サーモンは開始時と現在の魚体状態も目標に一致する必要がある。ローカル代替セッションでは自動進行しない。Geminiは工程完了や安全性を保証しない。連続動画は送らない。
+- 既定モデル名は `gemini-3.5-flash-lite`（`GEMINI_MODEL` で変更可能）。結果の `certainty: uncertain` は共有契約とUIで不確実として表示する。
 
 ## APIと保存
 
