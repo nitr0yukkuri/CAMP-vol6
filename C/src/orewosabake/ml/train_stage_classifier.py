@@ -302,7 +302,7 @@ def evaluate_video_transitions(mp: object, model_path: Path, data_root: Path, mo
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--fish-id", choices=["hamachi", "aji", "saba", "tai"], required=True)
+    parser.add_argument("--fish-id", choices=["hamachi", "aji", "saba", "tai", "salmon"], required=True)
     parser.add_argument("--data", type=Path, default=None, help="prepared train/validation/test folders")
     parser.add_argument("--output", type=Path, default=None, help="model output folder under ml/generated/fish-stage")
     parser.add_argument("--epochs", type=int, default=10)

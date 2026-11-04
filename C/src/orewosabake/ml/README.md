@@ -110,7 +110,8 @@ The script prints the exact command to train. The pinned dependencies resolve th
 
 The web client loads `apps/web/public/models/head-tail.tflite` through MediaPipe Tasks Vision `ObjectDetector` in `VIDEO` mode inside a dedicated Web Worker. It also looks for a separate, optional fish-specific stage classifier at `apps/web/public/models/fish-stage/{fishId}.tflite`; when present, the same sampled `ImageBitmap` is passed through MediaPipe `ImageClassifier` in `VIDEO` mode. Both tasks sample the local camera about once per second, and the worker is terminated when the camera/guide is stopped. Frames stay in the browser and are not sent to the API or an external service. Stage predictions need three consecutive matches at the initial 0.70 confidence floor before the app reports a stable stage change. That floor and cadence are prototype defaults, not calibrated thresholds. A detected change presents the next guide step as a suggestion; it does not silently advance the reviewed procedure.
 
-The stage model is independent for each supported fish (`hamachi`, `aji`, `saba`, `tai`). It uses the reviewed `confirmed_stage` values from research captures: `whole`, `head_removed`, `gutted`, `filleting`, and `finished`. `unknown`, `other`, and unreviewed rows are excluded. A missing stage model leaves stage recognition visibly unavailable while head/tail detection can continue. The current capture manifest is only an empty template, so no stage model has been trained or copied to the app yet.
+The stage model is independent for each supported fish (`hamachi`, `aji`, `saba`, `tai`, `salmon`). It uses the reviewed `confirmed_stage` values from research captures: `whole`, `head_removed`, `gutted`, `filleting`, and `finished`. `unknown`, `other`, and unreviewed rows are excluded unless an explicitly reviewed `unknown` reject class is included in all splits. A missing stage model leaves stage recognition visibly unavailable while head/tail detection can continue. Salmon support in the preparation/training scripts does not mean a salmon model exists: the current capture manifest is only an empty template, so no stage model has been trained or copied to the app yet.
+For salmon, `whole` covers the fish before its head is removed; the model does not distinguish whether scales have been removed. `head_removed` means the head is off while the belly is still closed, `gutted` means the belly is opened and the innards removed, `filleting` covers either side while separating flesh from the backbone, and `finished` means both sides are separated. Optional pin-bone and skin work is not a model label and remains a manual check.
 
 ### Train a fish-specific stage classifier
 
@@ -120,28 +121,28 @@ First capture reviewed frames across independent fish and camera sessions. In th
 python ml/prepare_stage_capture.py `
   --manifest "D:\fish-pilot\capture-manifest.csv" `
   --images-dir "D:\fish-pilot" `
-  --fish-id hamachi `
+  --fish-id salmon `
   --write-split-template
 ```
 
-Assign the groups in `ml/generated/fish-stage/hamachi/split-plan/group-split-template.csv`, then prepare the images:
+Assign the groups in `ml/generated/fish-stage/salmon/split-plan/group-split-template.csv`, then prepare the images:
 
 ```powershell
 python ml/prepare_stage_capture.py `
   --manifest "D:\fish-pilot\capture-manifest.csv" `
   --images-dir "D:\fish-pilot" `
-  --fish-id hamachi `
-  --split-map ml/generated/fish-stage/hamachi/split-plan/group-split-template.csv
+  --fish-id salmon `
+  --split-map ml/generated/fish-stage/salmon/split-plan/group-split-template.csv
 ```
 
 Train in the repository's isolated WSL Python 3.10 environment. The command saves the model and report under the ignored generated folder. It evaluates both Model Maker's held-out split and the exported TFLite file through MediaPipe Tasks, then reports per-class precision/recall/F1 and a confusion matrix. The model is deliberately not copied into the web app automatically.
 
 ```bash
 model_maker_python="${XDG_DATA_HOME:-$HOME/.local/share}/orewosabake/model-maker/venv/bin/python"
-"$model_maker_python" ml/train_stage_classifier.py --fish-id hamachi
+"$model_maker_python" ml/train_stage_classifier.py --fish-id salmon
 ```
 
-Review the held-out per-class errors and the capture conditions before promoting. To use a reviewed model locally, copy `ml/generated/fish-stage/hamachi/model/fish-stage-hamachi.tflite` to `apps/web/public/models/fish-stage/hamachi.tflite`. Repeat with separate data for each fish. Do not interpret one model's results as evidence for other fish or capture conditions. Google's Model Maker guide suggests about 100 images per class as a starting point, not an accuracy guarantee; use more independent fish/sessions and actual phone video before relying on live prompts.
+Review the held-out per-class errors and the capture conditions before promoting. To use a reviewed model locally, copy `ml/generated/fish-stage/salmon/model/fish-stage-salmon.tflite` to `apps/web/public/models/fish-stage/salmon.tflite`. Repeat with separate data for each fish. Do not interpret one model's results as evidence for other fish or capture conditions. Google's Model Maker guide suggests about 100 images per class as a starting point, not an accuracy guarantee; use more independent fish/sessions and actual phone video before relying on live prompts.
 
 The converter also writes `stage-samples.csv` with the test frames' fish/session IDs and capture times. The training report replays those time-ordered test frames through MediaPipe's `VIDEO` classifier, applies the app's 0.70 confidence floor and three-frame debounce, then reports transition precision, recall, misses, false alarms, and detection delay. The app resets its candidate and establishes a new baseline after a gap over 2.5 seconds or a hidden tab; it only suggests the immediately following instruction when the current instruction's expected state matches the detected state. A ground-truth transition is counted only when adjacent reviewed test frames are at most 2.5 seconds apart; therefore this is a sparse-sequence measure, not full-video action recognition. Capture around every stage change at roughly the app's one-frame-per-second cadence. The timing settings are prototype defaults and must be checked on longer, independent phone videos before the suggestion is treated as dependable.
 
