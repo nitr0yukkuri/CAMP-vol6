@@ -14,6 +14,39 @@ type PresenceStatus = "true" | "false" | "unknown";
 type CaptureLabelSource = "unknown" | "ai_suggestion" | "manual";
 type CapturePart = "head" | "tail";
 type CaptureBox = { x: number; y: number; width: number; height: number };
+type VoiceCommandStatus = "idle" | "starting" | "listening" | "error";
+
+type SpeechRecognitionAlternativeLike = { transcript: string };
+type SpeechRecognitionResultLike = ArrayLike<SpeechRecognitionAlternativeLike> & { isFinal: boolean };
+type SpeechRecognitionEventLike = { resultIndex: number; results: ArrayLike<SpeechRecognitionResultLike> };
+type SpeechRecognitionErrorLike = { error: string };
+type SpeechRecognitionLike = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  maxAlternatives: number;
+  onstart: (() => void) | null;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorLike) => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+  stop(): void;
+  abort(): void;
+};
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+
+function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | undefined {
+  if (typeof window === "undefined") return undefined;
+  const speechWindow = window as Window & {
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+  };
+  return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
+}
+
+function normalizeVoiceCommand(transcript: string): string {
+  return transcript.normalize("NFKC").replace(/[\s、。,.，．!！?？]/gu, "");
+}
 
 type CaptureRow = {
   fish_species: string;
@@ -321,14 +354,23 @@ function advanceLocalGuideSession(session: GuideSession): GuideSession {
   });
 }
 
-async function advanceGuideSession(session: GuideSession, signal: AbortSignal, source: "button" | "vision"): Promise<GuideSession> {
+async function advanceGuideSession(
+  session: GuideSession,
+  signal: AbortSignal,
+  source: "button" | "voice" | "vision",
+  transcript?: string,
+): Promise<GuideSession> {
   const currentStep = session.currentStep;
   if (!currentStep) throw new Error("There is no active guide step");
 
   const response = await fetch(`/api/guide/sessions/${session.sessionId}/advance`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(AdvanceGuideStepRequestSchema.parse({ stepId: currentStep.id, source })),
+    body: JSON.stringify(AdvanceGuideStepRequestSchema.parse({
+      stepId: currentStep.id,
+      source,
+      ...(transcript ? { transcript } : {}),
+    })),
     signal,
   });
   if (!response.ok) throw new Error("Guide session could not advance");
@@ -467,7 +509,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
           </li>
         </ol>
 
-        <p className="help-privacy-note">ガイド中の映像はMediaPipeで端末内処理します。頭・尾の検知が3回続けて安定した後、送信前に人物チェックを行い、顔を検知した場合や人物チェックを利用できない場合はGeminiへ送りません。顔の見逃しを完全に防ぐものではありません。チェックを通過したサーモンの画像は工程開始時と現在の圧縮静止画をGoogle Geminiへ自動送信します。連続動画は送らず、画像はアプリに保存しません。サーモンは見た目で確認できる一部の工程だけ、Geminiの判定が3回続けて一致すると自動で次へ進みます。うろこと小骨の確認は自動判定せず、画面の「次の工程へ」を押します。試作機能のため、魚と手元を確認してください。</p>
+        <p className="help-privacy-note">ガイド中の映像はMediaPipeで端末内処理します。頭・尾の検知が3回続けて安定した後、送信前に人物チェックを行い、顔を検知した場合や人物チェックを利用できない場合はGeminiへ送りません。顔の見逃しを完全に防ぐものではありません。チェックを通過したサーモンの画像は工程開始時と現在の圧縮静止画をGoogle Geminiへ自動送信します。連続動画は送らず、画像はアプリに保存しません。サーモンは見た目で確認できる一部の工程だけ、Geminiの判定が3回続けて一致すると自動で次へ進みます。うろこと小骨の確認は自動判定せず、画面の「次の工程へ」を押します。音声操作は開始ボタンを押している間だけマイクで「次へ」を聞きます。ブラウザの音声認識を使い、ブラウザによっては音声が外部の認識サービスへ送信されます。アプリは音声を保存しません。試作機能のため、魚と手元を確認してください。</p>
         <footer className="help-dialog-footer">
           <button type="button" onClick={() => dialogRef.current?.close()}>OK</button>
         </footer>
@@ -499,6 +541,8 @@ function App() {
   const [geminiAutoAdvanceCount, setGeminiAutoAdvanceCount] = useState(0);
   const [pageVisible, setPageVisible] = useState(true);
   const [guideAdvancing, setGuideAdvancing] = useState(false);
+  const [voiceCommandStatus, setVoiceCommandStatus] = useState<VoiceCommandStatus>("idle");
+  const [voiceCommandMessage, setVoiceCommandMessage] = useState("");
   const [activeStep, setActiveStepState] = useState(0);
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("idle");
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
@@ -525,6 +569,15 @@ function App() {
   const [pendingCapture, setPendingCapture] = useState<PendingCapture | null>(null);
   const [captureLabelsConfirmed, setCaptureLabelsConfirmed] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const voiceRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const voiceCommandEnabledRef = useRef(false);
+  const voiceRestartTimerRef = useRef<number | null>(null);
+  const lastVoiceAdvanceAtRef = useRef(0);
+  const advanceVoiceStepRef = useRef<(() => void) | null>(null);
+  const speechRecognitionConstructor = getSpeechRecognitionConstructor();
+  const voiceCommandsSupported = typeof window !== "undefined"
+    && window.isSecureContext
+    && speechRecognitionConstructor !== undefined;
   const captureStartedAt = useRef<number | null>(null);
   const cameraRequestId = useRef(0);
   const guideRequestController = useRef<AbortController | null>(null);
@@ -1115,10 +1168,13 @@ function App() {
     setScreen("select");
   }
 
-  async function advanceStep(source: "button" | "vision" = "button") {
+  async function advanceStep(source: "button" | "voice" | "vision" = "button", transcript?: string) {
     if (!guideSession || !guide) return;
     const nextIndex = Math.min(guide.steps.length - 1, activeStep + 1);
-    if (guideAdvanceInFlight.current) return;
+    if (guideAdvanceInFlight.current) {
+      if (source === "voice") setVoiceCommandMessage("工程を更新中です。終わったらもう一度「次へ」と話してね");
+      return;
+    }
 
     if (source === "vision") {
       const candidate = geminiAutoAdvanceCandidate.current;
@@ -1159,6 +1215,7 @@ function App() {
         setActiveStep(nextIndex);
         setGuideMessage("");
       }
+      if (source === "voice") stopVoiceCommands("ガイドは完了しています");
       return;
     }
 
@@ -1167,6 +1224,7 @@ function App() {
     // the next server step is submitted once the UI catches up.
     if (activeStep < guideSession.currentStepIndex || activeStep > guideSession.currentStepIndex) {
       if (nextIndex !== activeStep) setActiveStep(nextIndex);
+      if (source === "voice") setVoiceCommandMessage("次の工程に進みました。「次へ」で続けられます");
       return;
     }
 
@@ -1177,11 +1235,13 @@ function App() {
         setActiveStep(session.currentStepIndex);
         setGuideMessage("");
         stopCamera();
+        if (source === "voice") stopVoiceCommands("ガイド完了！おつかれさま");
         return;
       }
       setGuideSession(session);
       setActiveStep(Math.min(session.currentStepIndex, session.guide.steps.length - 1));
       setGuideMessage("");
+      if (source === "voice") setVoiceCommandMessage("次の工程に進みました。「次へ」で続けられます");
       return;
     }
 
@@ -1199,25 +1259,188 @@ function App() {
     guideAdvanceInFlight.current = true;
     setGuideAdvancing(true);
     try {
-      const session = await advanceGuideSession(guideSession, signal, source);
+      const session = await advanceGuideSession(guideSession, signal, source, transcript);
       if (signal.aborted) return;
       if (session.status === "completed") {
         setGuideSession(session);
         setActiveStep(session.currentStepIndex);
         setGuideMessage("");
         stopCamera();
+        if (source === "voice") stopVoiceCommands("ガイド完了！おつかれさま");
         return;
       }
       setGuideSession(session);
       setActiveStep(Math.min(session.currentStepIndex, session.guide.steps.length - 1));
       setGuideMessage("");
+      if (source === "voice") setVoiceCommandMessage("次の工程に進みました。「次へ」で続けられます");
     } catch {
-      if (!signal.aborted) setGuideMessage("工程を更新できませんでした。現在の手順を確認して、もう一度お試しください。");
+      if (!signal.aborted) {
+        setGuideMessage("工程を更新できませんでした。現在の手順を確認して、もう一度お試しください。");
+        if (source === "voice") setVoiceCommandMessage("工程を更新できませんでした。もう一度「次へ」と話してね");
+      }
     } finally {
       guideAdvanceInFlight.current = false;
       setGuideAdvancing(false);
     }
   }
+
+  function stopVoiceCommands(message?: string) {
+    voiceCommandEnabledRef.current = false;
+    if (voiceRestartTimerRef.current !== null) {
+      window.clearTimeout(voiceRestartTimerRef.current);
+      voiceRestartTimerRef.current = null;
+    }
+    const recognition = voiceRecognitionRef.current;
+    voiceRecognitionRef.current = null;
+    if (recognition) {
+      recognition.onend = null;
+      recognition.onresult = null;
+      recognition.onerror = null;
+      try {
+        recognition.abort();
+      } catch {
+        // The browser may already have stopped the microphone service.
+      }
+    }
+    setVoiceCommandStatus("idle");
+    if (message !== undefined) setVoiceCommandMessage(message);
+  }
+
+  function startVoiceCommands() {
+    if (!window.isSecureContext) {
+      setVoiceCommandStatus("error");
+      setVoiceCommandMessage("音声操作にはHTTPS接続が必要です。画面のボタンで進めてね");
+      return;
+    }
+    const Recognition = getSpeechRecognitionConstructor();
+    if (!Recognition) {
+      setVoiceCommandStatus("error");
+      setVoiceCommandMessage("このブラウザは音声入力に対応していません。画面のボタンで進めてね");
+      return;
+    }
+    if (voiceCommandEnabledRef.current) return;
+
+    let recognition: SpeechRecognitionLike;
+    try {
+      recognition = new Recognition();
+    } catch {
+      setVoiceCommandStatus("error");
+      setVoiceCommandMessage("音声認識を起動できません。画面のボタンで進めてね");
+      return;
+    }
+
+    voiceCommandEnabledRef.current = true;
+    voiceRecognitionRef.current = recognition;
+    setVoiceCommandStatus("starting");
+    setVoiceCommandMessage("マイクを準備中…");
+    recognition.lang = "ja-JP";
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.onstart = () => {
+      if (!voiceCommandEnabledRef.current || voiceRecognitionRef.current !== recognition) return;
+      setVoiceCommandStatus("listening");
+      setVoiceCommandMessage("「次へ」と話すと進みます");
+    };
+    recognition.onresult = (event) => {
+      if (!voiceCommandEnabledRef.current || voiceRecognitionRef.current !== recognition) return;
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        if (!result?.isFinal) continue;
+        const transcript = normalizeVoiceCommand(result[0]?.transcript ?? "");
+        if (transcript !== "次へ" && transcript !== "つぎへ") continue;
+        const now = Date.now();
+        if (now - lastVoiceAdvanceAtRef.current < 1_200) continue;
+        lastVoiceAdvanceAtRef.current = now;
+        setVoiceCommandMessage("「次へ」を聞き取りました。工程を更新中…");
+        advanceVoiceStepRef.current?.();
+      }
+    };
+    recognition.onerror = (event) => {
+      if (!voiceCommandEnabledRef.current || voiceRecognitionRef.current !== recognition) return;
+      if (event.error === "no-speech") {
+        setVoiceCommandMessage("聞き取れなかったよ。「次へ」ともう一度話してね");
+        return;
+      }
+      voiceCommandEnabledRef.current = false;
+      voiceRecognitionRef.current = null;
+      try {
+        recognition.abort();
+      } catch {
+        // The recognition service may already have stopped.
+      }
+      setVoiceCommandStatus("error");
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        setVoiceCommandMessage("マイクが許可されていません。ブラウザの設定を確認してね");
+      } else if (event.error === "audio-capture") {
+        setVoiceCommandMessage("マイクを使えません。画面のボタンで進めてね");
+      } else if (event.error === "network") {
+        setVoiceCommandMessage("音声認識サービスに接続できません。画面のボタンで進めてね");
+      } else {
+        setVoiceCommandMessage("音声認識が止まりました。画面のボタンで進めてね");
+      }
+    };
+    recognition.onend = () => {
+      if (!voiceCommandEnabledRef.current || voiceRecognitionRef.current !== recognition) return;
+      setVoiceCommandStatus("starting");
+      if (voiceRestartTimerRef.current !== null) window.clearTimeout(voiceRestartTimerRef.current);
+      voiceRestartTimerRef.current = window.setTimeout(() => {
+        voiceRestartTimerRef.current = null;
+        if (!voiceCommandEnabledRef.current || voiceRecognitionRef.current !== recognition) return;
+        try {
+          recognition.start();
+        } catch {
+          voiceCommandEnabledRef.current = false;
+          voiceRecognitionRef.current = null;
+          setVoiceCommandStatus("error");
+          setVoiceCommandMessage("音声認識を再開できません。画面のボタンで進めてね");
+        }
+      }, 300);
+    };
+    try {
+      recognition.start();
+    } catch {
+      voiceCommandEnabledRef.current = false;
+      voiceRecognitionRef.current = null;
+      setVoiceCommandStatus("error");
+      setVoiceCommandMessage("音声認識を開始できません。マイクの設定を確認してね");
+    }
+  }
+
+  function toggleVoiceCommands() {
+    if (voiceCommandEnabledRef.current) {
+      stopVoiceCommands("音声操作を停止しました");
+    } else {
+      startVoiceCommands();
+    }
+  }
+
+  advanceVoiceStepRef.current = () => {
+    if (screen !== "guide" || !guideSession || guideSession.status === "completed"
+      || guideSessionLoading || guideAdvancing || !currentStep) {
+      setVoiceCommandMessage("今は工程を更新できません。画面の状態を確認してね");
+      return;
+    }
+    void advanceStep("voice", "次へ");
+  };
+
+  useEffect(() => {
+    if (screen === "guide" && guideSession?.status === "active" && pageVisible) return;
+    if (voiceCommandEnabledRef.current) {
+      stopVoiceCommands(pageVisible ? "音声操作を停止しました" : "画面を離れたため音声操作を停止しました");
+    }
+  }, [screen, guideSession?.sessionId, guideSession?.status, pageVisible]);
+
+  useEffect(() => () => {
+    voiceCommandEnabledRef.current = false;
+    if (voiceRestartTimerRef.current !== null) window.clearTimeout(voiceRestartTimerRef.current);
+    try {
+      voiceRecognitionRef.current?.abort();
+    } catch {
+      // The browser may already have stopped the microphone service.
+    }
+    voiceRecognitionRef.current = null;
+  }, []);
 
   async function analyzeCurrentCameraImage(expectedSignature: string): Promise<boolean> {
     if (geminiAnalysis.loading || guideAdvancing || guideSessionLoading) return false;
@@ -2077,6 +2300,24 @@ function App() {
                     <div className="guide-controls">
                       <button type="button" onClick={() => { setActiveStep((step) => Math.max(0, step - 1)); setGuideMessage(""); }} disabled={!guideSession || activeStep === 0}>戻る</button>
                       <button type="button" onClick={() => void advanceStep()} disabled={!guideSession || guideSessionLoading || guideAdvancing || (isLastGuideStep && guideIsComplete)}>{guideSessionLoading ? "準備中…" : guideAdvancing ? "更新中…" : isLastGuideStep ? "ガイドを完了" : "次の工程へ"} <span>→</span></button>
+                    </div>
+                    <div className="guide-voice-controls">
+                      <button
+                        type="button"
+                        className="guide-voice-toggle"
+                        onClick={toggleVoiceCommands}
+                        disabled={!guideSession || guideSessionLoading || !voiceCommandsSupported}
+                        aria-pressed={voiceCommandStatus === "starting" || voiceCommandStatus === "listening"}
+                      >
+                        {voiceCommandStatus === "starting" || voiceCommandStatus === "listening" ? "音声操作を停止" : "声で「次へ」"}
+                      </button>
+                      <span className="guide-voice-status" role="status" aria-live="polite">
+                        {voiceCommandMessage || (voiceCommandsSupported
+                          ? "開始して「次へ」と話してね"
+                          : typeof window !== "undefined" && !window.isSecureContext
+                            ? "HTTPS接続で使えます。画面のボタンで進めてね"
+                            : "このブラウザは音声入力に非対応です。画面のボタンで進めてね")}
+                      </span>
                     </div>
                   </div>
                 ) : null}
