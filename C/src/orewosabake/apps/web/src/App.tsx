@@ -170,6 +170,15 @@ const SALMON_AUTO_ADVANCE_STEP_IDS = new Set([
   "salmon_second_side",
 ]);
 
+function canAutoAdvanceGuideStep(
+  fishId: GuideRequest["fishId"] | undefined,
+  stepId: string | undefined,
+  expectedState: GuideSession["guide"]["steps"][number]["expectedState"] | undefined,
+): boolean {
+  if (!fishId || !stepId || !expectedState || expectedState === "unknown") return false;
+  return fishId !== "salmon" || SALMON_AUTO_ADVANCE_STEP_IDS.has(stepId);
+}
+
 function fishStateLabel(state: NonNullable<GuideImageAnalysisResponse["fishStateAssessment"]>["state"]): string {
   switch (state) {
     case "whole_fish": return "丸のまま";
@@ -450,7 +459,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
             ×
           </button>
         </header>
-        <p className="help-dialog-lead">魚を選び、カメラの横で手順を確認しながら、自分で進めます。</p>
+        <p className="help-dialog-lead">魚を選び、カメラ映像を参考に手順を進めます。魚と手元も確認してください。</p>
 
         <ol className="help-flow">
           <li>
@@ -463,11 +472,11 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
           </li>
           <li>
             <span>3</span>
-            <div><strong>手順を確認して進む</strong><p>カメラを許可して手順を確認。内容を確かめたら「次の工程へ」を押します。閉じると最初からです。</p></div>
+            <div><strong>手順を確認して進む</strong><p>カメラを許可して手順を確認。AIが完了を3回続けて判定すると、対象の工程は自動で次へ進みます。手元も確認しながら進めてください。</p></div>
           </li>
         </ol>
 
-        <p className="help-privacy-note">ガイド中の映像はMediaPipeで端末内処理します。頭・尾の検知が3回続けて安定した後、送信前に人物チェックを行い、顔を検知した場合や人物チェックを利用できない場合はGeminiへ送りません。顔の見逃しを完全に防ぐものではありません。チェックを通過したサーモンの画像は工程開始時と現在の圧縮静止画をGoogle Geminiへ自動送信します。連続動画は送らず、画像はアプリに保存しません。サーモンは見た目で確認できる一部の工程だけ、Geminiの判定が3回続けて一致すると自動で次へ進みます。うろこと小骨の確認は自動判定せず、画面の「次の工程へ」を押します。試作機能のため、魚と手元を確認してください。</p>
+        <p className="help-privacy-note">ガイド中の映像はMediaPipeで端末内処理します。頭・尾の検知が3回続けて安定した後、送信前に人物チェックを行い、顔を検知した場合や人物チェックを利用できない場合はGeminiへ送りません。顔の見逃しを完全に防ぐものではありません。チェックを通過した魚種の圧縮静止画をGoogle Geminiへ自動送信します。連続動画は送らず、画像はアプリに保存しません。AIが同じ工程を3回続けて完了と判定すると、対象の工程は自動で次へ進みます。判定は工程の完了や安全を保証しないため、魚と手元を確認してください。</p>
         <footer className="help-dialog-footer">
           <button type="button" onClick={() => dialogRef.current?.close()}>OK</button>
         </footer>
@@ -1127,9 +1136,13 @@ function App() {
       const liveSignature = geminiObservationSignature(currentStep?.id ?? "", observation);
       if (!candidate
         || !analysisContext
-        || selectedGuideFishId !== "salmon"
         || !currentStep
-        || !SALMON_AUTO_ADVANCE_STEP_IDS.has(currentStep.id)
+        || !canAutoAdvanceGuideStep(selectedGuideFishId, currentStep.id, currentStep.expectedState)
+        || (selectedGuideFishId === "salmon" && (
+          geminiStepBaseline.current?.sessionId !== guideSession.sessionId
+          || geminiStepBaseline.current?.stepId !== currentStep.id
+          || geminiStepBaseline.current?.stream !== cameraStream
+        ))
         || activeStep !== guideSession.currentStepIndex
         || guideSession.currentStep?.id !== currentStep.id
         || guideSessionMode !== "worker"
@@ -1505,9 +1518,8 @@ function App() {
     const observation = latestObservationRef.current;
     const liveSignature = geminiObservationSignature(currentStep?.id ?? "", observation);
     const baseline = geminiStepBaseline.current;
-    const canCountConfirmation = selectedGuideFishId === "salmon"
-      && currentStep !== undefined
-      && SALMON_AUTO_ADVANCE_STEP_IDS.has(currentStep.id)
+    const canCountConfirmation = currentStep !== undefined
+      && canAutoAdvanceGuideStep(selectedGuideFishId, currentStep.id, currentStep.expectedState)
       && activeStep === guideSession?.currentStepIndex
       && guideSession?.currentStep?.id === currentStep.id
       && guideSessionMode === "worker"
@@ -1520,14 +1532,16 @@ function App() {
       && context.stream === cameraStream
       && context.signature === liveSignature
       && geminiAutoDetectionWatch.current.stableSignature === context.signature
-      && baseline?.sessionId === context.sessionId
-      && baseline.stepId === context.stepId
-      && baseline.stream === context.stream
+      && (selectedGuideFishId !== "salmon" || (
+        baseline?.sessionId === context.sessionId
+        && baseline.stepId === context.stepId
+        && baseline.stream === context.stream
+      ))
       && headTailDetection.status === "active"
       && headTailDetection.faceDetectionReady
       && hasFreshHeadTailObservation(observation)
       && result.certainty === "observed"
-      && result.fishStateAssessment?.state === currentStep.expectedState
+      && (selectedGuideFishId !== "salmon" || result.fishStateAssessment?.state === currentStep.expectedState)
       && result.stepAssessment.status === "likely_complete";
 
     if (!canCountConfirmation || !currentStep || !guideSession) {
@@ -1670,7 +1684,7 @@ function App() {
         return `魚体の状態：${fishState}\n工程：映像だけでは分からないみたい。手元を確認してね`;
       }
       if (currentAnalysis.stepAssessment.status === "likely_complete") {
-        return `魚体の状態：${fishState}\n工程：できていそう！自動確認 ${geminiAutoAdvanceCount}/${GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS}`;
+        return `魚体の状態：${fishState}\n工程：できていそう！自動で次へ進むよ（${geminiAutoAdvanceCount}/${GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS}）`;
       }
       if (currentAnalysis.stepAssessment.status === "in_progress") {
         return `魚体の状態：${fishState}\n工程：もう少しだね。手元を見ながら進めよう`;
@@ -1683,7 +1697,12 @@ function App() {
     if (currentAnalysis) {
       const assessment = currentAnalysis.stepAssessment;
       if (currentAnalysis.certainty === "uncertain") return "映像だけでは分からないみたい。手元を確認してね";
-      if (assessment.status === "likely_complete") return "できていそう！手元も確認して次へ進もう";
+      if (assessment.status === "likely_complete") {
+        if (canAutoAdvanceGuideStep(selectedGuideFishId, currentStep?.id, currentStep?.expectedState)) {
+          return `できていそう！自動で次へ進むよ（${geminiAutoAdvanceCount}/${GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS}）`;
+        }
+        return "できていそう！手元を確認してから進んでね";
+      }
       if (assessment.status === "in_progress") return "もう少しだね。手元を見ながら進めよう";
       return "映像だけでは分からないみたい。手元を確認してね";
     }
@@ -1699,7 +1718,7 @@ function App() {
     : currentAnalysis
         ? (currentAnalysis.certainty === "uncertain"
           || currentAnalysis.fishStateAssessment?.state === "unknown"
-          || (selectedGuideFishId === "salmon" && !SALMON_AUTO_ADVANCE_STEP_IDS.has(currentStep?.id ?? ""))
+          || !canAutoAdvanceGuideStep(selectedGuideFishId, currentStep?.id, currentStep?.expectedState)
           ? "uncertain"
           : currentAnalysis.stepAssessment.status)
         : headTailDetection.status;
