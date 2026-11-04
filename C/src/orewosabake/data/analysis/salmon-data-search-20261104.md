@@ -54,7 +54,7 @@
 - `data/phone-capture/capture-manifest.csv` はヘッダーのみで、実撮影行は0件。
 - 最新 `main` の公開アプリには研究用撮影画面がない。CSVテンプレートと学習データ準備コードはあるが、実撮影・ラベル収集はまだできていない。
 - `ml/prepare_stage_capture.py` と `ml/train_stage_classifier.py` は5つの既知状態と拒否用 `unknown` を扱うが、最新ガイドの6工程を独立判定するモデルではない。
-- 公開済みの `head-tail.tflite` は頭・尾検出用で、サーモン工程分類モデルではない。
+- 公開Releaseの `head-tail-model.zip` は頭・尾検出用。最新 `main` の `apps/web/public/models/` は `.gitkeep` のみで、サーモン工程分類モデルはReleaseにも公開されていない。
 - したがって、現段階では「サーモンを学習済み」とは言えない。
 
 ## 出典
