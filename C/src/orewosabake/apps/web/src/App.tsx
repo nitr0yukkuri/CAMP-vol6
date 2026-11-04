@@ -164,16 +164,16 @@ const GEMINI_AUTO_MIN_INTERVAL_MS = 10_000;
 const GEMINI_AUTO_RETRY_DELAYS_MS = [15_000, 30_000, 60_000] as const;
 const GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS = 3;
 const MANUAL_CONFIRMATION_STEP_IDS = new Set([
-  "maguro_check",
+  "maguro_portion", "maguro_wipe", "maguro_check",
   "salmon_scale", "salmon_bones",
   "hamachi_scales", "hamachi_gills", "hamachi_check",
   "aji_zeigo", "aji_trim",
   "saba_bones",
   "tai_scales", "tai_gills", "tai_trim",
-  "ebi_thaw", "ebi_wash",
-  "kani_cooked", "kani_legs",
-  "ika_check",
-  "tako_prepared", "tako_beak", "tako_clean",
+  "ebi_thaw", "ebi_vein", "ebi_wash",
+  "kani_cooked", "kani_shell", "kani_legs",
+  "ika_separate", "ika_open", "ika_arms", "ika_check",
+  "tako_prepared", "tako_head", "tako_beak", "tako_clean",
   "iwashi_clean", "iwashi_bone", "iwashi_finish",
   "buri_scale", "buri_wash", "buri_check",
   "katsuo_scale", "katsuo_wash", "katsuo_check",
