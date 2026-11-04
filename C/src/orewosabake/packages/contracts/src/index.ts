@@ -220,16 +220,17 @@ export const REFERENCE_GUIDES: Partial<Record<GuideRequest["fishId"], Guide>> = 
   salmon: GuideSchema.parse({
     title: "サーモンの三枚おろし",
     source: "public_reference",
-    sourceLabel: "日本さばけるプロジェクト「鮭のさばき方」",
+    sourceLabel: "日本さばけるプロジェクト「鮭のさばき方」＋提供された工程順（未レビュー）",
     sourceUrl: "https://sabakeru.uminohi.jp/sabakeru_channel/1038/",
+    completionMessage: "必要な骨・皮の処理まで手元で確認したら完成です。骨や皮の有無はAIでは判定しません。",
     expertReviewed: false,
     steps: [
       { id: "salmon_scale", title: "うろこを取る", description: "尾から頭に向かって、残りやすいヒレの近くまでうろこを取ろう。身を傷つけないよう、包丁を寝かせてね。", expectedState: "whole_fish" },
-      { id: "salmon_guts", title: "腹を開いて内臓を外す", description: "腹を開いて内臓を取り出し、血合いを洗い流そう。水気をしっかりふき取るよ。", expectedState: "opened" },
       { id: "salmon_head", title: "頭を外す", description: "胸びれの付け根から中骨まで切り込みを入れ、裏返して反対側も切るよ。骨が硬くて進まないときは無理をしないでね。", expectedState: "head_removed" },
+      { id: "salmon_guts", title: "内臓を外して洗う", description: "頭を外したあと、腹を開いて内臓を取り出そう。腹の血合いや血を洗い流し、水気をしっかりふき取るよ。", expectedState: "opened" },
       { id: "salmon_first_side", title: "片側の身を外す", description: "腹側と背側から中骨に沿って切り込み、尾側から身をはがしていこう。刃先が見える範囲で少しずつ進めるよ。", expectedState: "filleting" },
       { id: "salmon_second_side", title: "裏返して反対側も外す", description: "魚を裏返し、同じように反対側の身を外すよ。", expectedState: "filleted" },
-      { id: "salmon_bones", title: "腹骨と小骨を確認する", description: "腹骨を取り、身の小骨を目と指で確認しよう。加熱用なら十分に火を通してね。", expectedState: "filleted" },
+      { id: "salmon_bones", title: "必要に応じて骨・皮を取り除く", description: "腹骨や小骨を外す必要があれば取り除き、小骨は目と指で確認しよう。皮も料理に合わせて必要なら外してね。骨・皮を残す場合はそのまま完成で大丈夫。手元で確認したら「ガイドを完了」を押そう。", expectedState: "filleted" },
     ],
   }),
   hamachi: GuideSchema.parse({
