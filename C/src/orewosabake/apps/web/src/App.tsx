@@ -163,11 +163,31 @@ const GEMINI_AUTO_MAX_OBSERVATION_AGE_MS = 2_000;
 const GEMINI_AUTO_MIN_INTERVAL_MS = 10_000;
 const GEMINI_AUTO_RETRY_DELAYS_MS = [15_000, 30_000, 60_000] as const;
 const GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS = 3;
-const SALMON_AUTO_ADVANCE_STEP_IDS = new Set([
-  "salmon_guts",
-  "salmon_head",
-  "salmon_first_side",
-  "salmon_second_side",
+const MANUAL_CONFIRMATION_STEP_IDS = new Set([
+  "maguro_check",
+  "salmon_scale", "salmon_bones",
+  "hamachi_scales", "hamachi_gills", "hamachi_check",
+  "aji_zeigo", "aji_trim",
+  "saba_bones",
+  "tai_scales", "tai_gills", "tai_trim",
+  "ebi_thaw", "ebi_wash",
+  "kani_cooked", "kani_legs",
+  "ika_check",
+  "tako_prepared", "tako_clean",
+  "iwashi_clean", "iwashi_finish",
+  "buri_scale", "buri_wash", "buri_check",
+  "katsuo_scale", "katsuo_wash", "katsuo_check",
+  "hirame_clean", "hirame_clean_belly", "hirame_check",
+  "karei_scale", "karei_check",
+  "unagi_prepared", "unagi_rinse", "unagi_bone",
+  "anago_prepared", "anago_check", "anago_bone",
+  "hamo_shop", "hamo_check", "hamo_cook",
+  "tachiuo_clean", "tachiuo_check",
+  "kawahagi_spines", "kawahagi_guts", "kawahagi_check",
+  "other_finfish_identify", "other_finfish_scales", "other_finfish_gills",
+  "other_finfish_guts", "other_finfish_head", "other_finfish_belly_cut",
+  "other_finfish_back_cut", "other_finfish_first_side", "other_finfish_second_side",
+  "other_finfish_check",
 ]);
 
 function canAutoAdvanceGuideStep(
@@ -176,7 +196,7 @@ function canAutoAdvanceGuideStep(
   expectedState: GuideSession["guide"]["steps"][number]["expectedState"] | undefined,
 ): boolean {
   if (!fishId || !stepId || !expectedState || expectedState === "unknown") return false;
-  return fishId !== "salmon" || SALMON_AUTO_ADVANCE_STEP_IDS.has(stepId);
+  return !MANUAL_CONFIRMATION_STEP_IDS.has(stepId);
 }
 
 function fishStateLabel(state: NonNullable<GuideImageAnalysisResponse["fishStateAssessment"]>["state"]): string {
