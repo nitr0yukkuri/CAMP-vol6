@@ -535,7 +535,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
           </li>
           <li>
             <span>3</span>
-            <div><strong>手順を確認して進む</strong><p>ガイドを始めると、対応ブラウザーではマイクで「次へ」を聞き取り、工程を進められます。AIが対象の工程を「できていそう」と判定した場合も自動で次へ進みます。手元も確認しながら進めてください。</p></div>
+            <div><strong>手順を確認して進む</strong><p>ガイドを始めてマイクを許可すると、対応ブラウザーでは「次へ」を聞き取り、工程を進められます。AIが対象の工程を「できていそう」と判定した場合も自動で次へ進みます。手元も確認しながら進めてください。</p></div>
           </li>
         </ol>
 
@@ -1190,6 +1190,8 @@ function App() {
   }
 
   function backToFishSelection() {
+    voiceCommandAutoStartRef.current = false;
+    stopVoiceCommands();
     guideRequestController.current?.abort();
     guideRequestController.current = null;
     setGuideSessionLoading(false);
@@ -2349,7 +2351,6 @@ function App() {
                       <button type="button" onClick={() => { setActiveStep((step) => Math.max(0, step - 1)); setGuideMessage(""); }} disabled={!guideSession || activeStep === 0}>戻る</button>
                       <button type="button" onClick={() => void advanceStep()} disabled={!guideSession || guideSessionLoading || guideAdvancing || (isLastGuideStep && guideIsComplete)}>{guideSessionLoading ? "準備中…" : guideAdvancing ? "更新中…" : isLastGuideStep ? "ガイドを完了" : "次の工程へ"} <span>→</span></button>
                     </div>
-
                   </div>
                 ) : null}
               </aside>
