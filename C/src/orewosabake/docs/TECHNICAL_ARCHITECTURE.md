@@ -14,7 +14,7 @@
 | 開発用バックエンド | Node.js API | ローカル開発・API確認。本番Workerとは別実装 |
 | 学習 | Python、MediaPipe Model Maker | データ準備・TFLite学習・独立データ評価。HTTP中には学習しない |
 
-図は[architecture-runtime-v2.html](./architecture-runtime-v2.html)を参照。図はスマートフォンでは縦型、広い画面ではロゴ付き構成図で表示する。ロゴ・アイコン・フォントの権利表記は[第三者素材の通知](./STACK-DIAGRAM-NOTICES.md)。
+図は[architecture-runtime-v2.html](./architecture-runtime-v2.html)を参照。図はスマートフォンでは縦型、広い画面ではロゴ付き構成図で表示する。ロゴ・アイコン・フォントの権利表記は[第三者素材の通知](./STACK-DIAGRAM-NOTICES.md)。 PNG版は[architecture-runtime-v2.png](./architecture-runtime-v2.png)（2026-11-03、コミット `2127e62` 時点のスナップショット。現在の構成はHTML版を参照）。
 
 ## カメラから画面まで
 
