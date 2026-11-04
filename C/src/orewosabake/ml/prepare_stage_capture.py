@@ -21,6 +21,7 @@ FISH_NAMES = {
     "aji": {"アジ", "あじ"},
     "saba": {"サバ", "さば"},
     "tai": {"タイ", "たい", "鯛"},
+    "salmon": {"サーモン", "さけ", "鮭", "サケ"},
 }
 STAGE_LABELS = {"whole", "head_removed", "gutted", "filleting", "finished"}
 REJECT_LABEL = "unknown"
