@@ -195,7 +195,7 @@ const GEMINI_AUTO_MAX_FRAME_GAP_MS = 2_500;
 const GEMINI_AUTO_MAX_OBSERVATION_AGE_MS = 2_000;
 const GEMINI_AUTO_MIN_INTERVAL_MS = 10_000;
 const GEMINI_AUTO_RETRY_DELAYS_MS = [15_000, 30_000, 60_000] as const;
-const GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS = 3;
+const GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS = 1;
 const MANUAL_CONFIRMATION_STEP_IDS = new Set([
   "maguro_portion", "maguro_wipe", "maguro_check",
   "salmon_scale", "salmon_bones",
@@ -535,11 +535,11 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
           </li>
           <li>
             <span>3</span>
-            <div><strong>手順を確認して進む</strong><p>カメラを許可して手順を確認。AIが完了を3回続けて判定すると、対象の工程は自動で次へ進みます。手元も確認しながら進めてください。</p></div>
+            <div><strong>手順を確認して進む</strong><p>カメラを許可して手順を確認。AIが対象の工程を「できていそう」と判定すると、自動で次へ進みます。手元も確認しながら進めてください。</p></div>
           </li>
         </ol>
 
-        <p className="help-privacy-note">ガイド中の映像はMediaPipeで端末内処理します。頭・尾の検知が3回続けて安定した後、送信前に人物チェックを行い、顔を検知した場合や人物チェックを利用できない場合はGeminiへ送りません。顔の見逃しを完全に防ぐものではありません。チェックを通過したサーモンの画像は工程開始時と現在の圧縮静止画をGoogle Geminiへ自動送信します。連続動画は送らず、画像はアプリに保存しません。サーモンは見た目で確認できる一部の工程だけ、Geminiの判定が3回続けて一致すると自動で次へ進みます。うろこと小骨の確認は自動判定せず、画面の「次の工程へ」を押します。音声操作は開始ボタンを押している間だけマイクで「次へ」を聞きます。ブラウザの音声認識を使い、ブラウザによっては音声が外部の認識サービスへ送信されます。アプリは音声を保存しません。試作機能のため、魚と手元を確認してください。</p>
+        <p className="help-privacy-note">ガイド中の映像はMediaPipeで端末内処理します。頭・尾の検知が3回続けて安定した後、送信前に人物チェックを行い、顔を検知した場合や人物チェックを利用できない場合はGeminiへ送りません。顔の見逃しを完全に防ぐものではありません。チェックを通過したサーモンの画像は工程開始時と現在の圧縮静止画をGoogle Geminiへ自動送信します。連続動画は送らず、画像はアプリに保存しません。対象工程はGeminiが「できていそう」と判定すると自動で次へ進みます。うろこや骨など人の確認が必要な工程は、画面の「次の工程へ」を押してください。音声操作は開始ボタンを押している間だけマイクで「次へ」を聞きます。ブラウザの音声認識を使い、ブラウザによっては音声が外部の認識サービスへ送信されます。アプリは音声を保存しません。試作機能のため、魚と手元を確認してください。</p>
         <footer className="help-dialog-footer">
           <button type="button" onClick={() => dialogRef.current?.close()}>OK</button>
         </footer>
@@ -1928,7 +1928,7 @@ function App() {
         return `魚体の状態：${fishState}\n工程：映像だけでは分からないみたい。手元を確認してね`;
       }
       if (currentAnalysis.stepAssessment.status === "likely_complete") {
-        return `魚体の状態：${fishState}\n工程：できていそう！自動で次へ進むよ（${geminiAutoAdvanceCount}/${GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS}）`;
+        return `魚体の状態：${fishState}\n工程：${geminiAutoAdvanceCount >= GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS ? "できていそう！次へ進むね" : "できていそう！進行条件を確認中だよ"}`;
       }
       if (currentAnalysis.stepAssessment.status === "in_progress") {
         return `魚体の状態：${fishState}\n工程：もう少しだね。手元を見ながら進めよう`;
@@ -1943,7 +1943,7 @@ function App() {
       if (currentAnalysis.certainty === "uncertain") return "映像だけでは分からないみたい。手元を確認してね";
       if (assessment.status === "likely_complete") {
         if (canAutoAdvanceGuideStep(selectedGuideFishId, currentStep?.id, currentStep?.expectedState)) {
-          return `できていそう！自動で次へ進むよ（${geminiAutoAdvanceCount}/${GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS}）`;
+          return geminiAutoAdvanceCount >= GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS ? "できていそう！次へ進むね" : "できていそう！進行条件を確認中だよ";
         }
         return "できていそう！手元を確認してから進んでね";
       }
