@@ -94,11 +94,11 @@ status が "ready" の場合、steps には現在の一工程だけを入れて�
 
 現行の `/api/guide/analyze` は、手順生成ではなく、JSON schemaで検証された工程の見た目判定を返します。魚体状態フィールドを追加する試作はサーモンだけで、他魚種のAPI応答形式は従来どおりです。
 
-- `fishStateAssessment.state`: 魚体の見た目（`whole_fish`、`opened`、`head_removed`、`filleting`、`filleted`、`unknown`）
+- `fishStateAssessment.state`: 魚体の見た目（`whole_fish`、`opened`、`head_removed`、`filleting`、`filleted`、`unknown`）。頭がない魚の腹も開いている場合は `opened` を優先する
 - `stepAssessment.status`: 現在工程の見た目（`likely_complete`、`in_progress`、`uncertain`）
 
 サーモンでは各工程に入った時点で、人物チェックを通過した静止画をブラウザーのメモリだけに保持します。次のチェックで工程開始時と現在のJPEG静止画を一枚ずつGeminiに送り、同じ魚の変化を参考判定します。画面を閉じる、工程を変える、カメラを切り替えると開始画像を破棄します。ライブ映像や研究用データは送りません。
 
-Workerセッションでは、登録済み工程のうち画像で完了を確認できるものだけを自動送りの候補にします。MediaPipeの頭・尾検知と人物チェックが有効で、Geminiが現在工程について `certainty=observed` と `stepAssessment.status=likely_complete` を返した場合に1工程進みます。複数回のGemini確認待ちはしません。期待状態が `unknown` の工程、うろこ・骨確認、解凍・加熱など人の確認が必要な工程、その他の魚の汎用ガイドは手動です。サーモンは `fishStateAssessment` も `expectedState` と一致する必要があります。ローカル代替セッションは手動進行です。これはゼロショットの試作であり、作業完了や安全性を保証しません。
+Workerセッションでは、登録済み工程のうち画像で完了を確認できるものだけを自動送りの候補にします。MediaPipeの頭・尾検知と人物チェックが有効で、Geminiが現在工程について `certainty=observed` と `stepAssessment.status=likely_complete` を返した場合に1工程進みます。複数回のGemini確認待ちはしません。期待状態が `unknown` の工程、うろこ・骨の確認、サーモンの任意の皮処理、解凍・加熱など人の確認が必要な工程、その他の魚の汎用ガイドは手動です。サーモンは `fishStateAssessment` も `expectedState` と一致する必要があります。ローカル代替セッションは手動進行です。これはゼロショットの試作であり、作業完了や安全性を保証しません。
 
 これは学習済みモデルではなく、Geminiへの指示だけで試すゼロショットのハッカソン用試作です。魚を切る動作の安全性や作業完了を保証する機能ではありません。誤判定・見逃し・判定時間を実際の独立したサーモン個体で評価し、精度が足りない場合は自動送りを利用者確認に戻してください。
