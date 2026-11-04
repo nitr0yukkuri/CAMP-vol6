@@ -201,6 +201,11 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .guide-controls button:last-child:hover:not(:disabled) { border-color: var(--deep-soft); background: var(--deep-soft); }
 .guide-controls button:last-child span { font-size: 13px; font-weight: 400; }
 .guide-controls button:disabled { cursor: not-allowed; opacity: .45; }
+.guide-voice-controls { display: flex; min-width: 0; align-items: center; gap: 8px; margin-top: 6px; }
+.guide-voice-toggle { min-height: 32px; flex: 0 0 auto; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--deep-soft); background: var(--card); font-size: 9px; font-weight: 700; cursor: pointer; }
+.guide-voice-toggle[aria-pressed="true"] { border-color: var(--success); color: var(--deep); background: var(--success-surface); }
+.guide-voice-toggle:disabled { cursor: not-allowed; opacity: .45; }
+.guide-voice-status { min-width: 0; color: var(--muted); font-size: 8px; line-height: 1.35; }
 
 .capture-screen { min-height: 100vh; padding-bottom: 24px; background: var(--paper); }
 .capture-header { display: flex; min-height: 70px; align-items: center; gap: 13px; padding: 11px clamp(16px, 3vw, 34px); border-bottom: 1px solid var(--line); background: var(--card); }
