@@ -30,6 +30,7 @@ const WASM_PATH = "/mediapipe/wasm";
 const INFERENCE_INTERVAL_MS = 1_000;
 const INFERENCE_TIMEOUT_MS = 15_000;
 const INITIALIZATION_TIMEOUT_MS = 90_000;
+const AUTOMATIC_RESTART_DELAYS_MS = [1_000, 3_000, 8_000] as const;
 const MAX_OBSERVATION_AGE_MS = 2_000;
 const MAX_FRAME_DIMENSION = 832;
 const FACE_CHECK_TIMEOUT_MS = 10_000;
@@ -175,6 +176,7 @@ export function useHeadTailDetection(
     fishStage: STAGE_IDLE,
   });
   const [workerRestartKey, setWorkerRestartKey] = useState(0);
+  const automaticRestartCountRef = useRef(0);
   const workerRef = useRef<Worker | null>(null);
   const workerReadyRef = useRef(false);
   const mainThreadInferenceRef = useRef<MediaPipeFishInference | null>(null);
@@ -247,6 +249,8 @@ export function useHeadTailDetection(
     let inferenceInFlight = false;
     let intervalId: number | undefined;
     let inferenceTimeoutId: number | undefined;
+    let initializationTimeoutId: number | undefined;
+    let automaticRestartTimerId: number | undefined;
     let worker: Worker | null = null;
     let mainThreadInference: MediaPipeFishInference | null = null;
     let stageCandidate: FishStage | null = null;
@@ -258,6 +262,30 @@ export function useHeadTailDetection(
     let fishStageMessage = fishId ? "魚の状態判定モデルを確認しています。" : "この魚は状態判定モデルの対象外です。";
     let removeVisibilityListener: (() => void) | undefined;
     const initializationController = new AbortController();
+    let initializationTimedOut = false;
+    initializationTimeoutId = window.setTimeout(() => {
+      initializationTimedOut = true;
+      initializationController.abort();
+      stopInference();
+      if (!disposed) {
+        fishStageStatus = "error";
+        fishStageMessage = "MediaPipeの初期化が90秒でタイムアウトしました。";
+        setDetection({
+          status: "error",
+          message: "MediaPipeの初期化が90秒でタイムアウトしました。通信状態を確認して認識を再試行してください。",
+          observation: null,
+          faceDetectionReady: false,
+          faceDetectionMessage: "人物チェックを利用できません。自動画像確認は停止しています。",
+          fishStage: {
+            status: "error",
+            message: fishStageMessage,
+            stage: null,
+            score: null,
+            transition: null,
+          },
+        });
+      }
+    }, INITIALIZATION_TIMEOUT_MS);
 
     setDetection({
       status: "loading",
@@ -287,6 +315,23 @@ export function useHeadTailDetection(
     const fail = (error?: unknown) => {
       if (disposed) return;
       stopInference();
+      const retryDelayMs = AUTOMATIC_RESTART_DELAYS_MS[automaticRestartCountRef.current];
+      if (retryDelayMs !== undefined) {
+        automaticRestartCountRef.current += 1;
+        setDetection({
+          status: "loading",
+          message: `一時的な認識エラーのため、自動で再試行しています（${automaticRestartCountRef.current}/${AUTOMATIC_RESTART_DELAYS_MS.length}）。`,
+          observation: null,
+          faceDetectionReady: false,
+          faceDetectionMessage: "人物チェックを再確認しています。",
+          fishStage: { status: "loading", message: "認識モデルを再起動しています。", stage: null, score: null, transition: null },
+        });
+        automaticRestartTimerId = window.setTimeout(() => {
+          automaticRestartTimerId = undefined;
+          if (!disposed) setWorkerRestartKey((current) => current + 1);
+        }, retryDelayMs);
+        return;
+      }
       fishStageStatus = "error";
       fishStageMessage = "魚の状態判定Workerでエラーが発生しました。";
       setDetection({
@@ -390,6 +435,7 @@ export function useHeadTailDetection(
         fail(new Error("MediaPipeの検出結果を読み取れません。アプリを再読み込みしてください。"));
         return;
       }
+      automaticRestartCountRef.current = 0;
 
       if (document.visibilityState !== "visible") {
         stageCandidate = null;
@@ -525,7 +571,7 @@ export function useHeadTailDetection(
       let fishStageModelPath: string | undefined;
 
       try {
-        const modelResponse = await fetch(MODEL_PATH, { method: "HEAD", cache: "no-store" });
+        const modelResponse = await fetch(MODEL_PATH, { method: "HEAD", cache: "no-store", signal: initializationController.signal });
         const contentType = modelResponse.headers.get("content-type")?.toLowerCase() ?? "";
         if (!modelResponse.ok || contentType.includes("text/html")) {
           modelMissing = true;
@@ -533,7 +579,7 @@ export function useHeadTailDetection(
         }
 
         for (const assetPath of MEDIAPIPE_RUNTIME_ASSETS) {
-          const response = await fetch(assetPath, { method: "HEAD", cache: "no-store" });
+          const response = await fetch(assetPath, { method: "HEAD", cache: "no-store", signal: initializationController.signal });
           const assetContentType = response.headers.get("content-type")?.toLowerCase() ?? "";
           if (!response.ok || assetContentType.includes("text/html")) {
             throw new Error(`MediaPipeファイル ${assetPath} を読み込めません (HTTP ${response.status})。`);
@@ -543,7 +589,7 @@ export function useHeadTailDetection(
         if (fishId) {
           const candidatePath = `/models/fish-stage/${fishId}.tflite`;
           try {
-            const response = await fetch(candidatePath, { method: "HEAD", cache: "no-store" });
+            const response = await fetch(candidatePath, { method: "HEAD", cache: "no-store", signal: initializationController.signal });
             const candidateType = response.headers.get("content-type")?.toLowerCase() ?? "";
             if (response.ok && !candidateType.includes("text/html")) fishStageModelPath = candidatePath;
           } catch {
@@ -582,12 +628,13 @@ export function useHeadTailDetection(
           // classic WASM glue, which avoids module-Worker loader behavior.
           try {
             const { MediaPipeFishInference: createInference } = await import("../model/mediapipeHeadTailDetector");
+            if (disposed || initializationController.signal.aborted) return;
             mainThreadInference = await createInference.create(MODEL_PATH, WASM_PATH, fishStageModelPath, FACE_MODEL_PATH, false);
           } catch (fallbackError) {
             throw new Error(`Worker: ${errorMessage(workerError)} / 画面側: ${errorMessage(fallbackError)}`);
           }
-          if (disposed) {
-            mainThreadInference.close();
+          if (disposed || initializationController.signal.aborted) {
+            mainThreadInference?.close();
             mainThreadInference = null;
             return;
           }
@@ -615,6 +662,8 @@ export function useHeadTailDetection(
         }
 
         workerReadyRef.current = true;
+        if (initializationTimeoutId !== undefined) window.clearTimeout(initializationTimeoutId);
+        initializationTimeoutId = undefined;
         inferenceWorker?.addEventListener("message", handleWorkerMessage);
         inferenceWorker?.addEventListener("error", (event) => {
           if (disposed || worker !== inferenceWorker || workerRef.current !== inferenceWorker) return;
@@ -641,13 +690,17 @@ export function useHeadTailDetection(
         intervalId = window.setInterval(() => void startInference(), INFERENCE_INTERVAL_MS);
         void startInference();
       } catch (error) {
+        if (initializationTimeoutId !== undefined) window.clearTimeout(initializationTimeoutId);
+        initializationTimeoutId = undefined;
         stopInference();
         if (!disposed) {
           setDetection({
             status: modelMissing ? "unavailable" : "error",
             message: modelMissing
               ? "認識モデルが未配置です。mlの学習手順を実行すると検出が有効になります。"
-              : `MediaPipeを初期化できませんでした。${errorMessage(error)}`,
+              : initializationTimedOut
+                ? "MediaPipeの初期化が90秒でタイムアウトしました。通信状態を確認して認識を再試行してください。"
+                : `MediaPipeを初期化できませんでした。${errorMessage(error)}`,
             observation: null,
             faceDetectionReady: false,
             faceDetectionMessage: "人物チェックを利用できません。自動画像確認は停止しています。",
@@ -698,6 +751,8 @@ export function useHeadTailDetection(
     return () => {
       disposed = true;
       initializationController.abort();
+      if (initializationTimeoutId !== undefined) window.clearTimeout(initializationTimeoutId);
+      if (automaticRestartTimerId !== undefined) window.clearTimeout(automaticRestartTimerId);
       removeVisibilityListener?.();
       stopInference();
     };
@@ -705,3 +760,4 @@ export function useHeadTailDetection(
 
   return { ...detection, checkFrameForFace };
 }
+
