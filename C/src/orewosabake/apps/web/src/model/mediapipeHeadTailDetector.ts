@@ -57,9 +57,6 @@ function toObservation(
   capturedAt: string,
   faces: PixelBox[] | null,
 ): Observation {
-  if (faces === null) {
-    return ObservationSchema.parse({ source: "mediapipe", capturedAt, detections: [] });
-  }
   const nonFishSceneDetected = result.detections.some((detection) => {
     const category = detection.categories[0];
     return category?.categoryName?.toLowerCase() === "non_fish" && category.score >= NON_FISH_GATE_SCORE_THRESHOLD;
@@ -73,7 +70,7 @@ function toObservation(
     const box = detection.boundingBox;
 
     if ((label !== "head" && label !== "tail") || !category || !box || width <= 0 || height <= 0
-      || overlapsFace({ x: box.originX, y: box.originY, width: box.width, height: box.height }, faces)) {
+      || (faces !== null && overlapsFace({ x: box.originX, y: box.originY, width: box.width, height: box.height }, faces))) {
       return [];
     }
 
