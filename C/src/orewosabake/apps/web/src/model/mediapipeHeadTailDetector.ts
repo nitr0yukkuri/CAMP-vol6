@@ -15,7 +15,6 @@ const DETECTION_SCORE_THRESHOLD = 0.35;
 const DETECTION_MAX_RESULTS = 12;
 const NON_FISH_GATE_SCORE_THRESHOLD = 0.5;
 const FACE_DETECTION_MIN_CONFIDENCE = 0.5;
-const FACE_OVERLAP_COVERAGE_THRESHOLD = 0.35;
 const FACE_MODEL_DOWNLOAD_TIMEOUT_MS = 15_000;
 const MAX_FACE_MODEL_BYTES = 10 * 1024 * 1024;
 
@@ -40,31 +39,11 @@ function faceCandidates(detections: Detection[]): FaceCandidate[] {
   });
 }
 
-function faceBoundingBoxes(detections: Detection[]): PixelBox[] {
-  return faceCandidates(detections).map(({ box }) => box);
-}
-
-function overlapsFace(box: PixelBox, faces: PixelBox[]): boolean {
-  const area = box.width * box.height;
-  if (area <= 0) return false;
-  return faces.some((face) => {
-    const intersectionWidth = Math.max(0, Math.min(box.x + box.width, face.x + face.width) - Math.max(box.x, face.x));
-    const intersectionHeight = Math.max(0, Math.min(box.y + box.height, face.y + face.height) - Math.max(box.y, face.y));
-    const intersectionArea = intersectionWidth * intersectionHeight;
-    const faceArea = face.width * face.height;
-    return intersectionArea > 0 && (
-      intersectionArea / area >= FACE_OVERLAP_COVERAGE_THRESHOLD
-      || (faceArea > 0 && intersectionArea / faceArea >= FACE_OVERLAP_COVERAGE_THRESHOLD)
-    );
-  });
-}
-
 function toObservation(
   result: ObjectDetectorResult,
   width: number,
   height: number,
   capturedAt: string,
-  faces: PixelBox[] | null,
 ): Observation {
   const nonFishSceneDetected = result.detections.some((detection) => {
     const category = detection.categories[0];
@@ -79,7 +58,7 @@ function toObservation(
     const box = detection.boundingBox;
 
     if ((label !== "head" && label !== "tail") || !category || !box || width <= 0 || height <= 0
-      || (faces !== null && overlapsFace({ x: box.originX, y: box.originY, width: box.width, height: box.height }, faces))) {
+) {
       return [];
     }
 
@@ -268,16 +247,7 @@ export class MediaPipeFishInference {
     const monotonicTimestamp = Math.max(timestampMs, this.lastTimestampMs + 1);
     const result = this.detector.detectForVideo(bitmap, monotonicTimestamp);
     this.lastTimestampMs = monotonicTimestamp;
-    let faces: PixelBox[] | null = null;
-    try {
-      if (this.faceDetector) faces = faceBoundingBoxes(this.faceDetector.detectForVideo(bitmap, monotonicTimestamp).detections);
-    } catch (error) {
-      this.faceDetector?.close();
-      this.faceDetector = null;
-      const message = error instanceof Error ? error.message : String(error);
-      this.faceDetectionError = `人物チェックに失敗しました: ${message.replace(/\s+/g, " ").slice(0, 180)}`;
-    }
-    const observation = toObservation(result, bitmap.width, bitmap.height, capturedAt, faces);
+    const observation = toObservation(result, bitmap.width, bitmap.height, capturedAt);
 
     if (!this.fishStageClassifier || !faces || faces.length > 0) {
       return {
