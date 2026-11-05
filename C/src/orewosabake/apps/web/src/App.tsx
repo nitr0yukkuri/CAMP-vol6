@@ -1796,9 +1796,6 @@ function App() {
     pageVisible,
     cameraStatus,
     cameraStream,
-    headTailDetection.status,
-    headTailDetection.faceDetectionReady,
-    headTailDetection.observation,
     selectedGuideFishId,
   ]);
 
