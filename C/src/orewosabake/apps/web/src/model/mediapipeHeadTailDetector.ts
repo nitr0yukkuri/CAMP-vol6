@@ -25,14 +25,23 @@ function clampRatio(value: number): number {
 
 type PixelBox = { x: number; y: number; width: number; height: number };
 
-function faceBoundingBoxes(detections: Detection[]): PixelBox[] {
+type FaceCandidate = { score: number; box: PixelBox };
+
+function faceCandidates(detections: Detection[]): FaceCandidate[] {
   return detections.flatMap((detection) => {
     const box = detection.boundingBox;
     const score = detection.categories[0]?.score ?? 0;
     return box && score >= FACE_DETECTION_MIN_CONFIDENCE
-      ? [{ x: box.originX, y: box.originY, width: box.width, height: box.height }]
+      ? [{
+        score,
+        box: { x: box.originX, y: box.originY, width: box.width, height: box.height },
+      }]
       : [];
   });
+}
+
+function faceBoundingBoxes(detections: Detection[]): PixelBox[] {
+  return faceCandidates(detections).map(({ box }) => box);
 }
 
 function overlapsFace(box: PixelBox, faces: PixelBox[]): boolean {
@@ -228,7 +237,18 @@ export class MediaPipeFishInference {
     const monotonicTimestamp = Math.max(timestampMs, this.lastTimestampMs + 1);
     this.lastTimestampMs = monotonicTimestamp;
     try {
-      return faceBoundingBoxes(this.faceDetector.detectForVideo(bitmap, monotonicTimestamp).detections).length > 0;
+      const candidates = faceCandidates(this.faceDetector.detectForVideo(bitmap, monotonicTimestamp).detections);
+      const detected = candidates.length > 0;
+      console.debug("[MediaPipe] face-check", {
+        threshold: FACE_DETECTION_MIN_CONFIDENCE,
+        frame: { width: bitmap.width, height: bitmap.height },
+        detected,
+        candidates: candidates.map(({ score, box }) => ({
+          score: Number(score.toFixed(3)),
+          box,
+        })),
+      });
+      return detected;
     } catch (error) {
       this.faceDetector.close();
       this.faceDetector = null;
