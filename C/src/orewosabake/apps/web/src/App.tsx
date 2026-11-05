@@ -1239,7 +1239,6 @@ function App() {
         || candidate.stepId !== currentStep.id
         || candidate.count < GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS
         || geminiAnalysis.result?.certainty !== "observed"
-        || (selectedGuideFishId === "salmon" && geminiAnalysis.result.fishStateAssessment?.state !== currentStep.expectedState)
         || geminiAnalysis.result.stepAssessment.status !== "likely_complete") return;
       geminiAutoAdvanceCandidate.current = null;
       setGeminiAutoAdvanceCount(0);
