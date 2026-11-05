@@ -573,7 +573,6 @@ function App() {
   const [pageVisible, setPageVisible] = useState(true);
   const [guideAdvancing, setGuideAdvancing] = useState(false);
   const [voiceCommandStatus, setVoiceCommandStatus] = useState<VoiceCommandStatus>("idle");
-  const [voiceCommandMessage, setVoiceCommandMessage] = useState("");
   const [activeStep, setActiveStepState] = useState(0);
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("idle");
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
@@ -1207,7 +1206,6 @@ function App() {
     if (!guideSession || !guide) return;
     const nextIndex = Math.min(guide.steps.length - 1, activeStep + 1);
     if (guideAdvanceInFlight.current) {
-      if (source === "voice") setVoiceCommandMessage("工程を更新中です。終わったらもう一度「次へ」と話してね");
       return;
     }
 
@@ -1254,7 +1252,7 @@ function App() {
         setActiveStep(nextIndex);
         setGuideMessage("");
       }
-      if (source === "voice") stopVoiceCommands("ガイドは完了しています");
+      if (source === "voice") stopVoiceCommands();
       return;
     }
 
@@ -1263,7 +1261,6 @@ function App() {
     // the next server step is submitted once the UI catches up.
     if (activeStep < guideSession.currentStepIndex || activeStep > guideSession.currentStepIndex) {
       if (nextIndex !== activeStep) setActiveStep(nextIndex);
-      if (source === "voice") setVoiceCommandMessage("次の工程に進みました。「次へ」で続けられます");
       return;
     }
 
@@ -1274,13 +1271,12 @@ function App() {
         setActiveStep(session.currentStepIndex);
         setGuideMessage("");
         stopCamera();
-        if (source === "voice") stopVoiceCommands("ガイド完了！おつかれさま");
+        if (source === "voice") stopVoiceCommands();
         return;
       }
       setGuideSession(session);
       setActiveStep(Math.min(session.currentStepIndex, session.guide.steps.length - 1));
       setGuideMessage("");
-      if (source === "voice") setVoiceCommandMessage("次の工程に進みました。「次へ」で続けられます");
       return;
     }
 
@@ -1305,17 +1301,15 @@ function App() {
         setActiveStep(session.currentStepIndex);
         setGuideMessage("");
         stopCamera();
-        if (source === "voice") stopVoiceCommands("ガイド完了！おつかれさま");
+        if (source === "voice") stopVoiceCommands();
         return;
       }
       setGuideSession(session);
       setActiveStep(Math.min(session.currentStepIndex, session.guide.steps.length - 1));
       setGuideMessage("");
-      if (source === "voice") setVoiceCommandMessage("次の工程に進みました。「次へ」で続けられます");
     } catch {
       if (!signal.aborted) {
         setGuideMessage("工程を更新できませんでした。現在の手順を確認して、もう一度お試しください。");
-        if (source === "voice") setVoiceCommandMessage("工程を更新できませんでした。もう一度「次へ」と話してね");
       }
     } finally {
       guideAdvanceInFlight.current = false;
@@ -1323,7 +1317,7 @@ function App() {
     }
   }
 
-  function stopVoiceCommands(message?: string) {
+  function stopVoiceCommands() {
     voiceCommandEnabledRef.current = false;
     if (voiceRestartTimerRef.current !== null) {
       window.clearTimeout(voiceRestartTimerRef.current);
@@ -1342,19 +1336,16 @@ function App() {
       }
     }
     setVoiceCommandStatus("idle");
-    if (message !== undefined) setVoiceCommandMessage(message);
   }
 
   function startVoiceCommands() {
     if (!window.isSecureContext) {
       setVoiceCommandStatus("error");
-      setVoiceCommandMessage("音声操作にはHTTPS接続が必要です。画面のボタンで進めてね");
       return;
     }
     const Recognition = getSpeechRecognitionConstructor();
     if (!Recognition) {
       setVoiceCommandStatus("error");
-      setVoiceCommandMessage("このブラウザは音声入力に対応していません。画面のボタンで進めてね");
       return;
     }
     if (voiceCommandEnabledRef.current) return;
@@ -1364,14 +1355,12 @@ function App() {
       recognition = new Recognition();
     } catch {
       setVoiceCommandStatus("error");
-      setVoiceCommandMessage("音声認識を起動できません。画面のボタンで進めてね");
       return;
     }
 
     voiceCommandEnabledRef.current = true;
     voiceRecognitionRef.current = recognition;
     setVoiceCommandStatus("starting");
-    setVoiceCommandMessage("マイクを準備中…");
     recognition.lang = "ja-JP";
     recognition.continuous = true;
     recognition.interimResults = false;
@@ -1379,7 +1368,6 @@ function App() {
     recognition.onstart = () => {
       if (!voiceCommandEnabledRef.current || voiceRecognitionRef.current !== recognition) return;
       setVoiceCommandStatus("listening");
-      setVoiceCommandMessage("「次へ」と話すと進みます");
     };
     recognition.onresult = (event) => {
       if (!voiceCommandEnabledRef.current || voiceRecognitionRef.current !== recognition) return;
@@ -1391,14 +1379,12 @@ function App() {
         const now = Date.now();
         if (now - lastVoiceAdvanceAtRef.current < 1_200) continue;
         lastVoiceAdvanceAtRef.current = now;
-        setVoiceCommandMessage("「次へ」を聞き取りました。工程を更新中…");
         advanceVoiceStepRef.current?.();
       }
     };
     recognition.onerror = (event) => {
       if (!voiceCommandEnabledRef.current || voiceRecognitionRef.current !== recognition) return;
       if (event.error === "no-speech") {
-        setVoiceCommandMessage("聞き取れなかったよ。「次へ」ともう一度話してね");
         return;
       }
       voiceCommandEnabledRef.current = false;
@@ -1409,15 +1395,6 @@ function App() {
         // The recognition service may already have stopped.
       }
       setVoiceCommandStatus("error");
-      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
-        setVoiceCommandMessage("マイクが許可されていません。ブラウザの設定を確認してね");
-      } else if (event.error === "audio-capture") {
-        setVoiceCommandMessage("マイクを使えません。画面のボタンで進めてね");
-      } else if (event.error === "network") {
-        setVoiceCommandMessage("音声認識サービスに接続できません。画面のボタンで進めてね");
-      } else {
-        setVoiceCommandMessage("音声認識が止まりました。画面のボタンで進めてね");
-      }
     };
     recognition.onend = () => {
       if (!voiceCommandEnabledRef.current || voiceRecognitionRef.current !== recognition) return;
@@ -1432,7 +1409,6 @@ function App() {
           voiceCommandEnabledRef.current = false;
           voiceRecognitionRef.current = null;
           setVoiceCommandStatus("error");
-          setVoiceCommandMessage("音声認識を再開できません。画面のボタンで進めてね");
         }
       }, 300);
     };
@@ -1442,14 +1418,12 @@ function App() {
       voiceCommandEnabledRef.current = false;
       voiceRecognitionRef.current = null;
       setVoiceCommandStatus("error");
-      setVoiceCommandMessage("音声認識を開始できません。マイクの設定を確認してね");
     }
   }
 
   advanceVoiceStepRef.current = () => {
     if (screen !== "guide" || !guideSession || guideSession.status === "completed"
       || guideSessionLoading || guideAdvancing || !currentStep) {
-      setVoiceCommandMessage("今は工程を更新できません。画面の状態を確認してね");
       return;
     }
     void advanceStep("voice", "次へ");
@@ -1462,7 +1436,7 @@ function App() {
 
     if (!guideCanUseVoice || !pageVisible) {
       if (voiceCommandEnabledRef.current) {
-        stopVoiceCommands(pageVisible ? "音声操作を停止しました" : "画面を離れたため音声操作を停止しました");
+        stopVoiceCommands();
       }
       return;
     }
@@ -2314,7 +2288,7 @@ function App() {
                 <aside className="guide-fish-stage" aria-label={`${chosenFish}先生`}>
                   <div className="guide-fish-bubble" aria-live="polite">
                     <span className="guide-fish-bubble-copy">{fishTeacherDialogue(currentStep)}</span>
-                    {guideDetectionStatus || voiceCommandStatus === "error" ? (
+                    {guideDetectionStatus ? (
                       <div className="guide-fish-bubble-feedback">
                         {guideDetectionStatus ? (
                           <small
@@ -2323,11 +2297,6 @@ function App() {
                             role="status"
                           >
                             {guideDetectionStatus}
-                          </small>
-                        ) : null}
-                        {voiceCommandStatus === "error" ? (
-                          <small className="guide-fish-bubble-status" data-state="error" role="status">
-                            {voiceCommandMessage || "音声を使えないよ。画面の「次の工程へ」で進めてね"}
                           </small>
                         ) : null}
                         {canRetryHeadTailDetection ? (
