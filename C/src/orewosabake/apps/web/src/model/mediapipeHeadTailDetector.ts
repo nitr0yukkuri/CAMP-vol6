@@ -57,8 +57,7 @@ function toObservation(
     const label = category?.categoryName?.toLowerCase();
     const box = detection.boundingBox;
 
-    if ((label !== "head" && label !== "tail") || !category || !box || width <= 0 || height <= 0
-) {
+    if ((label !== "head" && label !== "tail") || !category || !box || width <= 0 || height <= 0) {
       return [];
     }
 
@@ -249,7 +248,7 @@ export class MediaPipeFishInference {
     this.lastTimestampMs = monotonicTimestamp;
     const observation = toObservation(result, bitmap.width, bitmap.height, capturedAt);
 
-    if (!this.fishStageClassifier || !faces || faces.length > 0) {
+    if (!this.fishStageClassifier) {
       return {
         observation,
         faceDetectionReady: this.faceDetector !== null,
