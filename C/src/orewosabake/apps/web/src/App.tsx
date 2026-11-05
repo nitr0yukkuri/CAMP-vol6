@@ -1758,7 +1758,6 @@ function App() {
         && baseline.stream === context.stream
       ))
       && result.certainty === "observed"
-      && (selectedGuideFishId !== "salmon" || result.fishStateAssessment?.state === currentStep.expectedState)
       && result.stepAssessment.status === "likely_complete";
 
     if (!canCountConfirmation || !currentStep || !guideSession) {
@@ -1860,7 +1859,6 @@ function App() {
         && baseline.stream === cameraStream
       ))
       && result?.certainty === "observed"
-      && (selectedGuideFishId !== "salmon" || result.fishStateAssessment?.state === currentStep.expectedState)
       && result?.stepAssessment.status === "likely_complete";
     if (!stillEligible) {
       geminiAutoAdvanceCandidate.current = null;
