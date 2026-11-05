@@ -127,6 +127,7 @@ type GeminiAutoAdvanceCandidate = {
   sessionId: string;
   stepId: string;
   signature: string;
+  requestId: number;
   count: number;
 };
 
@@ -1211,9 +1212,7 @@ function App() {
 
     if (source === "vision") {
       const candidate = geminiAutoAdvanceCandidate.current;
-      const observation = latestObservationRef.current;
       const analysisContext = geminiAnalysis.context;
-      const liveSignature = geminiObservationSignature(currentStep?.id ?? "", observation);
       if (!candidate
         || !analysisContext
         || !currentStep
@@ -1233,10 +1232,9 @@ function App() {
         || analysisContext?.sessionId !== guideSession.sessionId
         || analysisContext.stepId !== currentStep.id
         || analysisContext.stream !== cameraStream
+        || analysisContext.requestId !== candidate.requestId
+        || analysisContext.requestId !== geminiAnalysisRequestId.current
         || analysisContext.signature !== candidate.signature
-        || !headTailDetection.faceDetectionReady
-        || !hasFreshHeadTailObservation(observation)
-        || liveSignature !== candidate.signature
         || candidate.sessionId !== guideSession.sessionId
         || candidate.stepId !== currentStep.id
         || candidate.count < GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS
@@ -1740,8 +1738,6 @@ function App() {
     if (!result || geminiAnalysis.loading || !context || context.requestId === lastGeminiAutoAdvanceResultId.current) return;
     lastGeminiAutoAdvanceResultId.current = context.requestId;
 
-    const observation = latestObservationRef.current;
-    const liveSignature = geminiObservationSignature(currentStep?.id ?? "", observation);
     const baseline = geminiStepBaseline.current;
     const canCountConfirmation = currentStep !== undefined
       && canAutoAdvanceGuideStep(selectedGuideFishId, currentStep.id, currentStep.expectedState)
@@ -1755,16 +1751,12 @@ function App() {
       && context.sessionId === guideSession.sessionId
       && context.stepId === currentStep.id
       && context.stream === cameraStream
-      && context.signature === liveSignature
-      && geminiAutoDetectionWatch.current.stableSignature === context.signature
+      && context.requestId === geminiAnalysisRequestId.current
       && (selectedGuideFishId !== "salmon" || (
         baseline?.sessionId === context.sessionId
         && baseline.stepId === context.stepId
         && baseline.stream === context.stream
       ))
-      && headTailDetection.status === "active"
-      && headTailDetection.faceDetectionReady
-      && hasFreshHeadTailObservation(observation)
       && result.certainty === "observed"
       && (selectedGuideFishId !== "salmon" || result.fishStateAssessment?.state === currentStep.expectedState)
       && result.stepAssessment.status === "likely_complete";
@@ -1778,12 +1770,14 @@ function App() {
     const previous = geminiAutoAdvanceCandidate.current;
     const sameCandidate = previous?.sessionId === context.sessionId
       && previous.stepId === context.stepId
-      && previous.signature === context.signature;
+      && previous.signature === context.signature
+      && previous.requestId === context.requestId;
     const count = sameCandidate ? previous.count + 1 : 1;
     geminiAutoAdvanceCandidate.current = {
       sessionId: context.sessionId,
       stepId: context.stepId,
       signature: context.signature,
+      requestId: context.requestId,
       count,
     };
     setGeminiAutoAdvanceCount(count);
@@ -1802,9 +1796,6 @@ function App() {
     pageVisible,
     cameraStatus,
     cameraStream,
-    headTailDetection.status,
-    headTailDetection.faceDetectionReady,
-    headTailDetection.observation,
     selectedGuideFishId,
   ]);
 
@@ -1818,6 +1809,7 @@ function App() {
         || latestCandidate.sessionId !== candidate.sessionId
         || latestCandidate.stepId !== candidate.stepId
         || latestCandidate.signature !== candidate.signature
+        || latestCandidate.requestId !== candidate.requestId
         || latestCandidate.count < GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS) return;
       void advanceStep("vision");
     }, GEMINI_AUTO_ADVANCE_FEEDBACK_DELAY_MS);
@@ -1838,15 +1830,14 @@ function App() {
     cameraStatus,
     cameraStream,
     guideIsComplete,
-    headTailDetection.status,
-    headTailDetection.faceDetectionReady,
   ]);
 
   useEffect(() => {
     const candidate = geminiAutoAdvanceCandidate.current;
     if (!candidate) return;
-    const observation = latestObservationRef.current;
-    const signature = geminiObservationSignature(currentStep?.id ?? "", observation);
+    const context = geminiAnalysis.context;
+    const result = geminiAnalysis.result;
+    const baseline = geminiStepBaseline.current;
     const stillEligible = pageVisible
       && screen === "guide"
       && cameraStatus === "active"
@@ -1856,10 +1847,21 @@ function App() {
       && activeStep === guideSession.currentStepIndex
       && guideSession.currentStep?.id === currentStep.id
       && guideSessionMode === "worker"
-      && headTailDetection.status === "active"
-      && headTailDetection.faceDetectionReady
-      && hasFreshHeadTailObservation(observation)
-      && signature === candidate.signature;
+      && context?.sessionId === candidate.sessionId
+      && context.stepId === candidate.stepId
+      && context.stream === cameraStream
+      && context.signature === candidate.signature
+      && context.requestId === candidate.requestId
+      && context.requestId === geminiAnalysisRequestId.current
+      && canAutoAdvanceGuideStep(selectedGuideFishId, currentStep?.id, currentStep?.expectedState)
+      && (selectedGuideFishId !== "salmon" || (
+        baseline?.sessionId === candidate.sessionId
+        && baseline.stepId === candidate.stepId
+        && baseline.stream === cameraStream
+      ))
+      && result?.certainty === "observed"
+      && (selectedGuideFishId !== "salmon" || result.fishStateAssessment?.state === currentStep.expectedState)
+      && result?.stepAssessment.status === "likely_complete";
     if (!stillEligible) {
       geminiAutoAdvanceCandidate.current = null;
       setGeminiAutoAdvanceCount(0);
@@ -1873,11 +1875,12 @@ function App() {
     guideSession?.currentStepIndex,
     guideSession?.currentStep?.id,
     currentStep?.id,
+    currentStep?.expectedState,
     activeStep,
     guideSessionMode,
-    headTailDetection.status,
-    headTailDetection.faceDetectionReady,
-    headTailDetection.observation,
+    selectedGuideFishId,
+    geminiAnalysis.context?.requestId,
+    geminiAnalysis.result,
   ]);
 
   const detectionTitle = headTailDetection.status === "active"
