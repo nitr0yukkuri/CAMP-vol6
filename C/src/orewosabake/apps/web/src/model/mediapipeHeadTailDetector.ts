@@ -306,4 +306,3 @@ export class MediaPipeFishInference {
     this.detector.close();
   }
 }
-

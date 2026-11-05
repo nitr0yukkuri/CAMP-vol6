@@ -177,6 +177,7 @@ export function useHeadTailDetection(
   });
   const [workerRestartKey, setWorkerRestartKey] = useState(0);
   const automaticRestartCountRef = useRef(0);
+  const previousRetryKeyRef = useRef(retryKey);
   const workerRef = useRef<Worker | null>(null);
   const workerReadyRef = useRef(false);
   const mainThreadInferenceRef = useRef<MediaPipeFishInference | null>(null);
@@ -237,6 +238,11 @@ export function useHeadTailDetection(
   }), []);
 
   useEffect(() => {
+    if (previousRetryKeyRef.current !== retryKey) {
+      previousRetryKeyRef.current = retryKey;
+      automaticRestartCountRef.current = 0;
+    }
+
     if (!enabled) {
       workerRef.current = null;
       workerReadyRef.current = false;
@@ -760,4 +766,3 @@ export function useHeadTailDetection(
 
   return { ...detection, checkFrameForFace };
 }
-
