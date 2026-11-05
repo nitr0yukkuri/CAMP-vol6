@@ -1436,7 +1436,7 @@ function App() {
 
     if (!guideCanUseVoice || !pageVisible) {
       if (voiceCommandEnabledRef.current) {
-        stopVoiceCommands(pageVisible ? "音声操作を停止しました" : "画面を離れたため音声操作を停止しました");
+        stopVoiceCommands();
       }
       return;
     }
