@@ -196,6 +196,7 @@ const GEMINI_AUTO_MAX_OBSERVATION_AGE_MS = 2_000;
 const GEMINI_AUTO_MIN_INTERVAL_MS = 10_000;
 const GEMINI_AUTO_RETRY_DELAYS_MS = [15_000, 30_000, 60_000] as const;
 const GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS = 1;
+const GEMINI_AUTO_ADVANCE_FEEDBACK_DELAY_MS = 1_500;
 const MANUAL_CONFIRMATION_STEP_IDS = new Set([
   "maguro_portion", "maguro_wipe", "maguro_check",
   "salmon_scale", "salmon_bones",
@@ -1812,10 +1813,6 @@ function App() {
       count,
     };
     setGeminiAutoAdvanceCount(count);
-
-    if (count >= GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS) {
-      void advanceStep("vision");
-    }
   }, [
     geminiAnalysis.loading,
     geminiAnalysis.result,
@@ -1835,6 +1832,40 @@ function App() {
     headTailDetection.faceDetectionReady,
     headTailDetection.observation,
     selectedGuideFishId,
+  ]);
+
+  useEffect(() => {
+    const candidate = geminiAutoAdvanceCandidate.current;
+    if (!candidate || geminiAutoAdvanceCount < GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS) return;
+
+    const timerId = window.setTimeout(() => {
+      const latestCandidate = geminiAutoAdvanceCandidate.current;
+      if (!latestCandidate
+        || latestCandidate.sessionId !== candidate.sessionId
+        || latestCandidate.stepId !== candidate.stepId
+        || latestCandidate.signature !== candidate.signature
+        || latestCandidate.count < GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS) return;
+      void advanceStep("vision");
+    }, GEMINI_AUTO_ADVANCE_FEEDBACK_DELAY_MS);
+
+    return () => window.clearTimeout(timerId);
+  }, [
+    geminiAutoAdvanceCount,
+    currentStep?.id,
+    activeStep,
+    guideSession?.sessionId,
+    guideSession?.currentStepIndex,
+    guideSession?.currentStep?.id,
+    guideSessionMode,
+    guideSessionLoading,
+    guideAdvancing,
+    screen,
+    pageVisible,
+    cameraStatus,
+    cameraStream,
+    guideIsComplete,
+    headTailDetection.status,
+    headTailDetection.faceDetectionReady,
   ]);
 
   useEffect(() => {
