@@ -715,6 +715,8 @@ function App() {
   const selectedFishVisualData = selectedFishData ?? (selectedFish === "その他" ? genericFishVisualData : undefined);
   const knownGuideFishId = resolveGuideFishId(chosenFish);
   const selectedGuideFishId = knownGuideFishId ?? (selectedFish === "その他" ? "other_finfish" : undefined);
+  const selectedGuideAvailable = selectedGuideFishId !== undefined
+    && getReferenceGuide(selectedGuideFishId, getPreparationIdForFish(selectedGuideFishId)) !== undefined;
   const stageCaptureSupported = knownGuideFishId !== undefined
     && ["aji", "saba", "tai", "hamachi"].includes(knownGuideFishId);
   const guide = guideSession?.guide;
@@ -772,6 +774,7 @@ function App() {
   }
 
   function startGuide() {
+    if (!selectedGuideAvailable || !selectedGuideFishId) return;
     voiceCommandAutoStartRef.current = Boolean(selectedGuideFishId);
     if (voiceCommandAutoStartRef.current) startVoiceCommands();
     setScreen("guide");
@@ -2059,9 +2062,9 @@ function App() {
               {matchingFish.length === 0 && !search ? <p className="empty-fish">このカテゴリの魚は準備中です。</p> : null}
             </div>
 
-            <button className="start-button" type="button" onClick={() => void startGuide()}>
+            <button className="start-button" type="button" disabled={!selectedGuideAvailable} onClick={() => void startGuide()}>
               <strong>俺を捌け！</strong>
-              <span>{selectedGuideFishId === "other_finfish" ? "基本の三枚おろしで進む" : selectedGuideFishId ? "この魚を捌く" : "この魚の手順は準備中"}</span>
+              <span>{!selectedGuideAvailable ? "この魚の手順は準備中" : selectedGuideFishId === "other_finfish" ? "基本の三枚おろしで進む" : "この魚を捌く"}</span>
             </button>
           </div>
         </section>
