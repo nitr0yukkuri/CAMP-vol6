@@ -1940,7 +1940,7 @@ function App() {
         return `魚体の状態：${fishState}\n工程：映像だけでは分からないみたい。手元を確認してね`;
       }
       if (currentAnalysis.stepAssessment.status === "likely_complete") {
-        return `魚体の状態：${fishState}\n工程：${geminiAutoAdvanceCount >= GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS ? "できていそう！次へ進むね" : "できていそう！進行条件を確認中だよ"}`;
+        return `魚体の状態：${fishState}\n工程：${geminiAutoAdvanceCount >= GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS ? "できてる！次へ進むね" : "できてる！"}`;
       }
       if (currentAnalysis.stepAssessment.status === "in_progress") {
         return `魚体の状態：${fishState}\n工程：もう少しだね。手元を見ながら進めよう`;
@@ -1955,9 +1955,9 @@ function App() {
       if (currentAnalysis.certainty === "uncertain") return "映像だけでは分からないみたい。手元を確認してね";
       if (assessment.status === "likely_complete") {
         if (canAutoAdvanceGuideStep(selectedGuideFishId, currentStep?.id, currentStep?.expectedState)) {
-          return geminiAutoAdvanceCount >= GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS ? "できていそう！次へ進むね" : "できていそう！進行条件を確認中だよ";
+          return geminiAutoAdvanceCount >= GEMINI_AUTO_ADVANCE_REQUIRED_CONFIRMATIONS ? "できてる！次へ進むね" : "できてる！";
         }
-        return "できていそう！手元を確認してから進んでね";
+        return "できてる！手元を確認してから進んでね";
       }
       if (assessment.status === "in_progress") return "もう少しだね。手元を見ながら進めよう";
       return "映像だけでは分からないみたい。手元を確認してね";
